@@ -172,7 +172,7 @@ fu_mm_device_add_instance_id_vid(FuMmDevice *self, const gchar *value, GError **
 		fu_device_set_vid(FU_DEVICE(self), (guint16)value_u64);
 	}
 	if (fu_device_get_instance_str(FU_DEVICE(self), "VID") == NULL)
-		fu_device_add_instance_str(FU_DEVICE(self), "VID", value);
+		fu_device_add_instance_strsafe(FU_DEVICE(self), "VID", value);
 	return TRUE;
 }
 
@@ -186,7 +186,7 @@ fu_mm_device_add_instance_id_pid(FuMmDevice *self, const gchar *value, GError **
 		fu_device_set_pid(FU_DEVICE(self), (guint16)value_u64);
 	}
 	if (fu_device_get_instance_str(FU_DEVICE(self), "PID") == NULL)
-		fu_device_add_instance_str(FU_DEVICE(self), "PID", value);
+		fu_device_add_instance_strsafe(FU_DEVICE(self), "PID", value);
 	return TRUE;
 }
 
@@ -221,7 +221,7 @@ fu_mm_device_add_instance_id(FuMmDevice *self, const gchar *device_id, GError **
 				return FALSE;
 		} else if (g_strcmp0(kv[0], "REV") == 0 || g_strcmp0(kv[0], "NAME") == 0 ||
 			   g_strcmp0(kv[0], "CARRIER") == 0) {
-			fu_device_add_instance_str(FU_DEVICE(self), kv[0], kv[1]);
+			fu_device_add_instance_strsafe(FU_DEVICE(self), kv[0], kv[1]);
 		} else if (g_strcmp0(kv[0], "SSVID") == 0 && subsys_vid == NULL) {
 			subsys_vid = g_strdup(kv[1]);
 		} else if (g_strcmp0(kv[0], "SSPID") == 0 && subsys_pid == NULL) {
@@ -234,7 +234,7 @@ fu_mm_device_add_instance_id(FuMmDevice *self, const gchar *device_id, GError **
 	/* convert nonstandard SSVID+SSPID to SUBSYS */
 	if (subsys_vid != NULL && subsys_pid != NULL) {
 		g_autofree gchar *subsys = g_strdup_printf("%s%s", subsys_vid, subsys_pid);
-		fu_device_add_instance_str(FU_DEVICE(self), "SUBSYS", subsys);
+		fu_device_add_instance_strsafe(FU_DEVICE(self), "SUBSYS", subsys);
 	}
 
 	/* add all possible instance IDs */
@@ -365,7 +365,7 @@ fu_mm_device_probe_from_omodem(FuMmDevice *self, MMObject *omodem, GError **erro
 	MMModem *modem = mm_object_peek_modem(omodem);
 	MMModemPortInfo *used_ports = NULL;
 	guint n_used_ports = 0;
-#if MM_CHECK_VERSION(1, 26, 0)
+#if MM_CHECK_VERSION(1, 25, 1)
 	MMModemPortInfo *ignored_ports = NULL;
 	guint n_ignored_ports = 0;
 #endif
@@ -435,7 +435,7 @@ fu_mm_device_probe_from_omodem(FuMmDevice *self, MMObject *omodem, GError **erro
 		mm_modem_port_info_array_free(used_ports, n_used_ports);
 	}
 
-#if MM_CHECK_VERSION(1, 26, 0)
+#if MM_CHECK_VERSION(1, 25, 1)
 	if (mm_modem_get_ignored_ports(modem, &ignored_ports, &n_ignored_ports)) {
 		for (guint i = 0; i < n_ignored_ports; i++) {
 			g_autofree gchar *device_file =

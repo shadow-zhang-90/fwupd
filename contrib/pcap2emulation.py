@@ -12,8 +12,8 @@ import json
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional, Tuple
-from zipfile import ZipFile, ZIP_DEFLATED
+from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
 URB_INTERRUPT = 1
 URB_CONTROL = 2
@@ -53,14 +53,14 @@ def add_bytes(array: bytearray, string: str, size: int) -> None:
 
 class Pcap2Emulation:
     def __init__(self, device_ids: str):
-        self.device: Dict[str, Any] = {}
+        self.device: dict[str, Any] = {}
         self.platform_id = ""
-        self.phases: List[Any] = []
-        self.device_ids: List[List[str]] = []
+        self.phases: list[Any] = []
+        self.device_ids: list[list[str]] = []
         self.interface_index = 0
         self.endpoint_index = 0
-        self.previous_data: Optional[str]
-        self.bulk_incoming_lens: Dict[str, int] = {}
+        self.previous_data: str | None
+        self.bulk_incoming_lens: dict[str, int] = {}
         self.usb_port = None
         self.enumerate = False
 
@@ -68,7 +68,7 @@ class Pcap2Emulation:
             device_id = device_ids[i].split(":")
             if len(device_id) > 2:
                 sys.stderr.write(f"Malformed device ID: {device_ids[i]}\n\n")
-                exit(1)
+                sys.exit(1)
             if len(device_id) == 2 and len(device_id[1]) == 0:
                 del device_id[1]
             if device_id not in self.device_ids:
@@ -133,7 +133,7 @@ class Pcap2Emulation:
         cmd.append(tshark_filter)
         return subprocess.Popen(cmd, stdout=subprocess.PIPE)
 
-    def _get_usb_addrs(self, file: str) -> Tuple[str, List[str]]:
+    def _get_usb_addrs(self, file: str) -> tuple[str, list[str]]:
         tshark_filter = ""
         for i in range(len(self.device_ids)):
             if len(tshark_filter) == 0:
@@ -146,7 +146,7 @@ class Pcap2Emulation:
             tshark_filter += ")"
 
         usb_bus = ""
-        usb_addrs: List[str] = []
+        usb_addrs: list[str] = []
         p = self._run_tshark(file, tshark_filter)
         for line in p.stdout:
             pcap_data = json.loads(line)
@@ -164,7 +164,7 @@ class Pcap2Emulation:
                     usb_addrs.append(addr)
         return usb_bus, usb_addrs
 
-    def _get_interrupt_event(self, layers: Dict[str, Any]) -> Dict[str, str]:
+    def _get_interrupt_event(self, layers: dict[str, Any]) -> dict[str, str]:
         if "usb_usb_capdata" in layers:
             captured_data = str(
                 base64.b64encode(
@@ -188,7 +188,7 @@ class Pcap2Emulation:
             return {"Id": s, "Data": captured_data}
         return {}
 
-    def _get_bulk_event(self, layers: Dict[str, Any]) -> Dict[str, str]:
+    def _get_bulk_event(self, layers: dict[str, Any]) -> dict[str, str]:
         captured_data = None
         if "usbccid" in layers:
             message_type = get_int(layers["usbccid"]["usbccid_usbccid_bMessageType"])
@@ -294,7 +294,7 @@ class Pcap2Emulation:
         return {}
 
     def _get_interface_descriptor(
-        self, layers: Dict[str, Any], descriptor_index: int
+        self, layers: dict[str, Any], descriptor_index: int
     ) -> Any:
         table = {
             "usb_usb_bInterfaceNumber": "InterfaceNumber",
@@ -310,11 +310,11 @@ class Pcap2Emulation:
         if len(layers["usb_usb_bInterfaceNumber"]) <= self.interface_index:
             return None
 
-        interface: Dict[str, Any] = {
+        interface: dict[str, Any] = {
             "Length": get_int(layers["usb_usb_bLength"][descriptor_index]),
             "DescriptorType": 4,
         }
-        for key in table:
+        for key, mapped_name in table.items():
             # data can be a string or a list of strings
             if type(layers[key]) is str:
                 val = get_int(layers[key])
@@ -327,15 +327,15 @@ class Pcap2Emulation:
             if key == "usb_usb_bInterfaceNumber" and val == 0:
                 continue
 
-            interface[table[key]] = val
+            interface[mapped_name] = val
             if key == "usb_usb_bNumEndpoints":
                 interface["UsbEndpoints"] = []
 
         return interface
 
     def _get_endpoint_descriptor(
-        self, layers: Dict[str, Any], index: int
-    ) -> Dict[str, int]:
+        self, layers: dict[str, Any], index: int
+    ) -> dict[str, int]:
         table = {
             "usb_usb_bEndpointAddress": "EndpointAddress",
             "usb_usb_bInterval": "Interval",
@@ -345,13 +345,13 @@ class Pcap2Emulation:
         endpoint = {
             "DescriptorType": 5,
         }
-        for key in table:
+        for key, mapped_name in table.items():
             val = get_int(layers[key][index])
             if val != 0:
-                endpoint[table[key]] = val
+                endpoint[mapped_name] = val
         return endpoint
 
-    def _save_event(self, event: Dict[str, str]) -> None:
+    def _save_event(self, event: dict[str, str]) -> None:
         if not self.device:
             return
 
@@ -425,12 +425,13 @@ class Pcap2Emulation:
                                 for i in range(len(self.device_ids)):
                                     if get_int(layers["usb_usb_idVendor"]) == int(
                                         self.device_ids[i][0], 16
+                                    ) and (
+                                        len(self.device_ids[i]) == 1
+                                        or get_int(layers["usb_usb_idProduct"])
+                                        == int(self.device_ids[i][1], 16)
                                     ):
-                                        if len(self.device_ids[i]) == 1 or get_int(
-                                            layers["usb_usb_idProduct"]
-                                        ) == int(self.device_ids[i][1], 16):
-                                            found = True
-                                            break
+                                        found = True
+                                        break
                                 if not found:
                                     continue
 
@@ -504,17 +505,13 @@ class Pcap2Emulation:
                                         # The list of supported languages are not recorded for the emulation
                                         continue
                                     event_str = {
-                                        "Id": "GetStringDescriptor:DescIndex=0x{:02x}".format(
-                                            desc_index
-                                        )
+                                        "Id": f"GetStringDescriptor:DescIndex=0x{desc_index:02x}"
                                     }
                                     # duplicate the event so it can also be used for GetStringDescriptorBytes
                                     language_id = get_int(layers["usb_usb_LanguageId"])
                                     length = get_int(layers["usb_usb_setup_wLength"])
                                     event_bytes = {
-                                        "Id": "GetStringDescriptorBytes:DescIndex=0x{:02x}".format(
-                                            desc_index
-                                        )
+                                        "Id": f"GetStringDescriptorBytes:DescIndex=0x{desc_index:02x}"
                                     }
                                     event_bytes["Id"] += f",Langid=0x{language_id:04x}"
                                     event_bytes["Id"] += f",Length=0x{length:x}"
@@ -606,7 +603,7 @@ class Pcap2Emulation:
                                 sys.stderr.write(
                                     "Unknown descriptor type: " + descriptor_type
                                 )
-                                exit(1)
+                                sys.exit(1)
 
                     elif "usb_usb_bmRequestType_type" in layers:
                         # Found vendor CONTROL URB request

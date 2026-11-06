@@ -3,32 +3,39 @@
 ## Getting started
 
 To set up your local fwupd development environment, from the top level of
-the checkout run:
+the checkout run the **fwupbuild** build tool:
 
 ```shell
-./contrib/setup
+./fwupbuild init builddir
 ```
 
-This will create pre-commit hooks to fixup many code style issues before your
-code is submitted.
+Where `builddir` represents a user-specified directory that will contain
+the fwupd build directory. All code and test installs will be built within that
+directory.
+
+This will also create pre-commit hooks to fixup many code style issues before
+your code is submitted.
 
 On some Linux distributions this will install all build dependencies needed
 to compile fwupd as well.
 
-A [virtualenv](https://virtualenv.pypa.io/en/latest/user_guide.html) will be created in `venv/` in the checkout that is used for
-building and running fwupd without affecting the local system installation.
+A [virtualenv](https://virtualenv.pypa.io/en/latest/user_guide.html) will be created in `builddir`
+and running fwupd without affecting the local system installation.
 
 To enter this virtualenv run:
 
 ```shell
-source venv/bin/activate
+source builddir/bin/activate
 ```
 
 To build fwupd in the venv run:
 
 ```shell
-build-fwupd
+fwupbuild -C builddir build
 ```
+
+If the `-C builddir` argument is omitted, **fwupbuild** will find the most recently
+initiated directory.
 
 Wrappers are configured while in the venv to run `fwupdtool`, `fwupd`, and
 `fwupdmgr` using the virtualenv directory structure.  To leave the virtualenv
@@ -95,7 +102,8 @@ from the PackageKit Coding Style.
 
 **NOTE:** Do not use `g_error()` -- it's not appropriate to abort the daemon on error.
 
-`./contrib/reformat-code.py` can be used in order to get automated
-formatting. Calling the script without arguments formats the current
-patch while passing commits will do formatting on everything changed since that
-commit.
+`clang-format` can be used in order to get automated formatting. It is invoked
+as part of the `pre-commit` hooks executed on git commit. Using `pre-commit` is
+the recommended way of checking coding style. Please refer to the
+[`clang-format` documentation](https://clang.llvm.org/docs/ClangCommandLineReference.html)
+for other invocations.

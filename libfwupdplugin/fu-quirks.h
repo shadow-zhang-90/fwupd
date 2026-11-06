@@ -62,6 +62,14 @@ fu_quirks_add_possible_key(FuQuirks *self, const gchar *possible_key) G_GNUC_NON
  **/
 #define FU_QUIRKS_FLAGS "Flags"
 /**
+ * FU_QUIRKS_HOST_BKC:
+ *
+ * The quirk key for the Host Best Known Configuration aka "BKC".
+ *
+ * Since: 2.1.8
+ **/
+#define FU_QUIRKS_HOST_BKC "HostBkc"
+/**
  * FU_QUIRKS_SUMMARY:
  *
  * The quirk key for the summary, e.g. `An open source display colorimeter`.
@@ -166,6 +174,14 @@ fu_quirks_add_possible_key(FuQuirks *self, const gchar *possible_key) G_GNUC_NON
  **/
 #define FU_QUIRKS_VERSION "Version"
 /**
+ * FU_QUIRKS_VERSION_RAW:
+ *
+ * The quirk key for the version, e.g. `0x123`.
+ *
+ * Since: 2.1.9
+ **/
+#define FU_QUIRKS_VERSION_RAW "VersionRaw"
+/**
  * FU_QUIRKS_VERSION_LOWEST:
  *
  * The quirk key for the lowest allowed version, e.g. `1.2.3`.
@@ -269,6 +285,14 @@ fu_quirks_add_possible_key(FuQuirks *self, const gchar *possible_key) G_GNUC_NON
  * Since: 1.3.7
  **/
 #define FU_QUIRKS_PROTOCOL "Protocol"
+/**
+ * FU_QUIRKS_PROBLEM:
+ *
+ * The quirk key for the problem, e.g. `insecure-platform`.
+ *
+ * Since: 2.1.8
+ **/
+#define FU_QUIRKS_PROBLEM "Problem"
 /**
  * FU_QUIRKS_UPDATE_MESSAGE:
  *

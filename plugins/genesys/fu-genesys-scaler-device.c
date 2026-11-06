@@ -1450,7 +1450,10 @@ fu_genesys_scaler_device_get_ddcci_data(FuGenesysScalerDevice *self,
 	data[5] = cmd;
 	data[6] = fu_xor8(data, sizeof(data) - 1);
 
-	if (!fu_usb_device_control_transfer(FU_USB_DEVICE(self),
+	proxy = fu_device_get_proxy(FU_DEVICE(self), error);
+	if (proxy == NULL)
+		return FALSE;
+	if (!fu_usb_device_control_transfer(FU_USB_DEVICE(proxy),
 					    FU_USB_DIRECTION_HOST_TO_DEVICE,
 					    FU_USB_REQUEST_TYPE_VENDOR,
 					    FU_USB_RECIPIENT_DEVICE,
@@ -1468,9 +1471,6 @@ fu_genesys_scaler_device_get_ddcci_data(FuGenesysScalerDevice *self,
 
 	fu_device_sleep(FU_DEVICE(self), 100); /* 1ms */
 
-	proxy = fu_device_get_proxy(FU_DEVICE(self), error);
-	if (proxy == NULL)
-		return FALSE;
 	if (!fu_usb_device_control_transfer(FU_USB_DEVICE(proxy),
 					    FU_USB_DIRECTION_DEVICE_TO_HOST,
 					    FU_USB_REQUEST_TYPE_VENDOR,
@@ -1671,9 +1671,15 @@ static GBytes *
 fu_genesys_scaler_device_dump_firmware(FuDevice *device, FuProgress *progress, GError **error)
 {
 	FuGenesysScalerDevice *self = FU_GENESYS_SCALER_DEVICE(device);
-	gsize size = fu_cfi_device_get_size(self->cfi_device);
+	gsize size;
 	g_autofree guint8 *buf = NULL;
 	g_autoptr(FuDeviceLocker) locker = NULL;
+
+	/* sanity check */
+	if (self->cfi_device == NULL) {
+		g_set_error_literal(error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED, "no CFI device");
+		return NULL;
+	}
 
 	/* progress */
 	fu_progress_set_id(progress, G_STRLOC);
@@ -1689,6 +1695,7 @@ fu_genesys_scaler_device_dump_firmware(FuDevice *device, FuProgress *progress, G
 		return NULL;
 	fu_progress_step_done(progress);
 
+	size = fu_cfi_device_get_size(self->cfi_device);
 	buf = g_malloc0(size);
 	if (!fu_genesys_scaler_device_read_flash(self,
 						 0,

@@ -78,7 +78,8 @@ fu_dell_kestrel_ec_is_chunk_supported(FuDellKestrelEc *self, FuDellKestrelEcDevT
 {
 	if (dev_type == FU_DELL_KESTREL_EC_DEV_TYPE_PD) {
 		guint8 chunk_support = 0;
-
+		if (self->dock_data == NULL)
+			return FALSE;
 		chunk_support = fu_struct_dell_kestrel_dock_data_get_chunk_support(self->dock_data);
 		return (chunk_support & FU_DELL_KESTREL_DOCK_DATA_CHUNK_SUPPORT_BITMAP_PD);
 	}
@@ -356,9 +357,11 @@ fu_dell_kestrel_ec_dock_info_cmd(FuDellKestrelEc *self, GError **error)
 		g_prefix_error_literal(error, "failed to query dock info: ");
 		return FALSE;
 	}
+	if (self->dock_info != NULL)
+		fu_struct_dell_kestrel_dock_info_unref(self->dock_info);
 	self->dock_info =
 	    fu_struct_dell_kestrel_dock_info_parse(st_res->buf->data, st_res->buf->len, 0, error);
-	return TRUE;
+	return self->dock_info != NULL;
 }
 
 static gboolean

@@ -242,14 +242,15 @@ fu_kernel_get_config(FuPathStore *pstore, GError **error)
 	    fu_path_store_build_filename(pstore, NULL, FU_PATH_KIND_PROCFS, "config.gz", NULL);
 	if (config_fngz != NULL && g_file_test(config_fngz, G_FILE_TEST_EXISTS)) {
 		g_autoptr(GBytes) payload = NULL;
-		g_autoptr(FuInputStream) istream1 = NULL;
+		g_autoptr(FwupdFileInputStream) istream1 = NULL;
 		g_autoptr(FuInputStream) istream2 = NULL;
 
-		istream1 = fu_input_stream_from_path(config_fngz, error);
+		istream1 = fwupd_file_input_stream_new(config_fngz, error);
 		if (istream1 == NULL)
 			return NULL;
-		istream2 =
-		    fu_compressor_stream_new_decompress(istream1, FU_COMPRESSOR_FORMAT_GZIP, error);
+		istream2 = fu_compressor_stream_new_decompress(FWUPD_INPUT_STREAM(istream1),
+							       FWUPD_COMPRESSOR_FORMAT_GZIP,
+							       error);
 		if (istream2 == NULL)
 			return NULL;
 		payload = fu_input_stream_read_bytes(istream2, 0, G_MAXSIZE, NULL, error);

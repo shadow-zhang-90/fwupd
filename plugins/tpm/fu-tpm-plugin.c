@@ -131,15 +131,73 @@ fu_tpm_plugin_add_security_attr_version(FuPlugin *plugin, FuSecurityAttrs *attrs
 	fu_security_attr_add_flag(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS);
 }
 
+static GPtrArray *
+fu_tpm_plugin_get_os_separator_checksums(GPtrArray *checksums, GError **error)
+{
+	g_autoptr(GPtrArray) checksums_new = g_ptr_array_new_with_free_func(g_free);
+
+	/* process each checksum type and regenerate the target PCR with the os-separator */
+	for (guint i = 0; i < checksums->len; i++) {
+		const gchar *checksum_str = g_ptr_array_index(checksums, i);
+		GChecksumType checksum_type = fwupd_checksum_guess_kind(checksum_str);
+		g_autofree gchar *os_separator_checksum = NULL;
+		g_autoptr(GBytes) eventlog_blob = NULL;
+		g_autoptr(GBytes) os_separator_blob = NULL;
+		g_autoptr(GChecksum) extended_checksum = g_checksum_new(checksum_type);
+
+		eventlog_blob = fu_bytes_from_string(checksum_str, error);
+		if (eventlog_blob == NULL)
+			return NULL;
+		os_separator_checksum =
+		    g_compute_checksum_for_string(checksum_type, "os-separator", -1);
+		os_separator_blob = fu_bytes_from_string(os_separator_checksum, error);
+		if (os_separator_blob == NULL)
+			return NULL;
+		g_checksum_update(extended_checksum,
+				  g_bytes_get_data(eventlog_blob, NULL),
+				  g_bytes_get_size(eventlog_blob));
+		g_checksum_update(extended_checksum,
+				  g_bytes_get_data(os_separator_blob, NULL),
+				  g_bytes_get_size(os_separator_blob));
+		g_ptr_array_add(checksums_new, g_strdup(g_checksum_get_string(extended_checksum)));
+	}
+
+	/* success */
+	return g_steal_pointer(&checksums_new);
+}
+
+static gboolean
+fu_tpm_plugin_checksums_match(GPtrArray *checksums, const gchar *checksum)
+{
+	for (guint j = 0; j < checksums->len; j++) {
+		const gchar *real_checksum = g_ptr_array_index(checksums, j);
+
+		if (g_strcmp0(real_checksum, checksum) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+static gboolean
+fu_tpm_plugin_checksums_match_all(GPtrArray *checksums1, GPtrArray *checksums2)
+{
+	for (guint j = 0; j < checksums2->len; j++) {
+		const gchar *checksum2 = g_ptr_array_index(checksums2, j);
+		if (!fu_tpm_plugin_checksums_match(checksums1, checksum2))
+			return FALSE;
+	}
+	return TRUE;
+}
+
 static void
 fu_tpm_plugin_add_security_attr_eventlog(FuPlugin *plugin, FuSecurityAttrs *attrs)
 {
 	FuTpmPlugin *self = FU_TPM_PLUGIN(plugin);
-	gboolean reconstructed = TRUE;
 	g_autoptr(FuSecurityAttr) attr = NULL;
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) pcr0s_calc = NULL;
 	g_autoptr(GPtrArray) pcr0s_real = NULL;
+	g_autoptr(GPtrArray) pcr0s_osep = NULL;
 
 	/* no TPM device */
 	if (self->tpm_device == NULL)
@@ -148,7 +206,7 @@ fu_tpm_plugin_add_security_attr_eventlog(FuPlugin *plugin, FuSecurityAttrs *attr
 	/* create attr */
 	attr = fu_plugin_security_attr_new(plugin, FWUPD_SECURITY_ATTR_ID_TPM_RECONSTRUCTION_PCR0);
 	fu_security_attr_add_guids(attr, fu_device_get_guids(self->tpm_device));
-	fu_security_attr_set_result_success(attr, FWUPD_SECURITY_ATTR_RESULT_VALID);
+	fu_security_attr_add_flag(attr, FWUPD_SECURITY_ATTR_FLAG_ACTION_CONTACT_OEM);
 	fu_security_attrs_append(attrs, attr);
 
 	/* check reconstructed to PCR0 */
@@ -165,35 +223,47 @@ fu_tpm_plugin_add_security_attr_eventlog(FuPlugin *plugin, FuSecurityAttrs *attr
 		fu_security_attr_add_flag(attr, FWUPD_SECURITY_ATTR_FLAG_ACTION_CONTACT_OEM);
 		return;
 	}
+	for (guint i = 0; i < pcr0s_calc->len; i++) {
+		const gchar *checksum = g_ptr_array_index(pcr0s_calc, i);
+		g_debug("pcr0s_calc[%u] = %s", i, checksum);
+	}
 
 	/* compare against the real PCR0s */
 	pcr0s_real = fu_tpm_device_get_checksums(self->tpm_device, 0);
-	for (guint i = 0; i < pcr0s_calc->len; i++) {
-		const gchar *checksum = g_ptr_array_index(pcr0s_calc, i);
-		reconstructed = FALSE;
-		for (guint j = 0; j < pcr0s_real->len; j++) {
-			const gchar *checksum_tmp = g_ptr_array_index(pcr0s_real, j);
-			/* skip unless same algorithm */
-			if (strlen(checksum) != strlen(checksum_tmp))
-				continue;
-			g_debug("comparing TPM %s and EVT %s", checksum, checksum_tmp);
-			if (g_strcmp0(checksum, checksum_tmp) == 0) {
-				reconstructed = TRUE;
-				break;
-			}
-		}
-		/* all algorithms must match */
-		if (!reconstructed)
-			break;
-	}
-	if (!reconstructed) {
+	if (pcr0s_real->len == 0) {
 		fu_security_attr_set_result(attr, FWUPD_SECURITY_ATTR_RESULT_NOT_VALID);
-		fu_security_attr_add_flag(attr, FWUPD_SECURITY_ATTR_FLAG_ACTION_CONTACT_OEM);
+		return;
+	}
+	for (guint i = 0; i < pcr0s_real->len; i++) {
+		const gchar *checksum = g_ptr_array_index(pcr0s_real, i);
+		g_debug("pcr0s_real[%u] = %s", i, checksum);
+	}
+	if (fu_tpm_plugin_checksums_match_all(pcr0s_real, pcr0s_calc)) {
+		fu_security_attr_set_result_success(attr, FWUPD_SECURITY_ATTR_RESULT_VALID);
+		fu_security_attr_add_flag(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS);
 		return;
 	}
 
-	/* success */
-	fu_security_attr_add_flag(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS);
+	/* systemd-pcrosseparator.service (since v261) may extend PCR0 with
+	 * `SHAx(current_pcr || SHAx("os-separator"))` in the initrd after the fw event log */
+	pcr0s_osep = fu_tpm_plugin_get_os_separator_checksums(pcr0s_calc, &error);
+	if (pcr0s_osep == NULL) {
+		g_warning("failed to get os-separator reconstruction: %s", error->message);
+		fu_security_attr_set_result(attr, FWUPD_SECURITY_ATTR_RESULT_NOT_VALID);
+		return;
+	}
+	for (guint i = 0; i < pcr0s_osep->len; i++) {
+		const gchar *checksum = g_ptr_array_index(pcr0s_osep, i);
+		g_debug("pcr0s_osep[%u] = %s", i, checksum);
+	}
+	if (fu_tpm_plugin_checksums_match_all(pcr0s_real, pcr0s_osep)) {
+		fu_security_attr_set_result_success(attr, FWUPD_SECURITY_ATTR_RESULT_TAINTED);
+		fu_security_attr_add_flag(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS);
+		return;
+	}
+
+	/* did nto match */
+	fu_security_attr_set_result(attr, FWUPD_SECURITY_ATTR_RESULT_NOT_VALID);
 }
 
 static void
@@ -392,7 +462,7 @@ fu_tpm_plugin_coldplug_eventlog(FuPlugin *plugin, GError **error)
 	blob = fu_bytes_get_contents(fn, error);
 	if (blob == NULL)
 		return FALSE;
-	stream = fu_memory_input_stream_new_from_bytes(blob);
+	stream = FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(blob));
 	eventlog = fu_firmware_new_from_gtypes(stream,
 					       0x0,
 					       FU_FIRMWARE_PARSE_FLAG_NONE,

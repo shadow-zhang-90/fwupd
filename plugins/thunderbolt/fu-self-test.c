@@ -19,7 +19,6 @@
 #include <unistd.h>
 
 #include "fu-context-private.h"
-#include "fu-file-input-stream.h"
 #include "fu-plugin-private.h"
 #include "fu-thunderbolt-plugin.h"
 #include "fu-udev-device-private.h"
@@ -223,7 +222,7 @@ mock_tree_firmware_verify(const FuThunderboltMockTree *node, GBytes *data)
 {
 	g_autoptr(GFile) nvm_device = NULL;
 	g_autoptr(GFile) nvm = NULL;
-	g_autoptr(FuInputStream) is = NULL;
+	g_autoptr(FwupdFileInputStream) is = NULL;
 	g_autoptr(GChecksum) chk = NULL;
 	g_autoptr(GError) error = NULL;
 	g_autofree gchar *sum_data = NULL;
@@ -239,14 +238,18 @@ mock_tree_firmware_verify(const FuThunderboltMockTree *node, GBytes *data)
 	nvm_device = g_file_new_for_path(node->nvm_non_active);
 	nvm = g_file_get_child(nvm_device, "nvmem");
 
-	is = fu_file_input_stream_from_file(nvm, &error);
+	is = fwupd_file_input_stream_new_from_file(nvm, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(is);
 
 	do {
 		guint8 tmpbuf[4096] = {0};
 
-		s = fu_input_stream_read(is, tmpbuf, sizeof(tmpbuf), NULL, &error);
+		s = fu_input_stream_read(FWUPD_INPUT_STREAM(is),
+					 tmpbuf,
+					 sizeof(tmpbuf),
+					 NULL,
+					 &error);
 		g_assert_no_error(error);
 		g_assert_cmpint(s, >=, 0);
 
@@ -355,14 +358,14 @@ write_controller_fw(const gchar *nvm)
 	g_assert_no_error(error);
 	g_assert_nonnull(os);
 
-	is = fu_memory_input_stream_new_from_bytes(fw_blob);
+	is = FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(fw_blob));
 
 	n = g_output_stream_splice(os, is, G_OUTPUT_STREAM_SPLICE_NONE, NULL, &error);
 	g_assert_no_error(error);
 	g_assert_cmpuint(n, >, 0);
 }
 
-static gboolean
+static void
 mock_tree_attach_device(gpointer user_data)
 {
 	FuThunderboltMockTree *tree = (FuThunderboltMockTree *)user_data;
@@ -420,10 +423,8 @@ mock_tree_attach_device(gpointer user_data)
 		child->bed = g_object_ref(tree->bed);
 		child->sysfs_parent = g_strdup(tree->path);
 
-		g_timeout_add(child->device->delay_ms, mock_tree_attach_device, child);
+		g_timeout_add_once(child->device->delay_ms, mock_tree_attach_device, child);
 	}
-
-	return G_SOURCE_REMOVE;
 }
 
 typedef struct {
@@ -431,12 +432,11 @@ typedef struct {
 	GMainLoop *loop;
 } FuThunderboltSyncContext;
 
-static gboolean
+static void
 on_sync_timeout(gpointer user_data)
 {
 	FuThunderboltSyncContext *ctx = (FuThunderboltSyncContext *)user_data;
 	g_main_loop_quit(ctx->loop);
-	return G_SOURCE_REMOVE;
 }
 
 static void
@@ -504,7 +504,7 @@ mock_tree_sync(FuThunderboltMockTree *root, FuPlugin *plugin, int timeout_ms)
 				  &ctx);
 
 	if (timeout_ms > 0)
-		g_timeout_add(timeout_ms, on_sync_timeout, &ctx);
+		g_timeout_add_once(timeout_ms, on_sync_timeout, &ctx);
 
 	g_main_loop_run(mainloop);
 
@@ -571,7 +571,7 @@ mock_tree_attach(FuThunderboltMockTree *root, UMockdevTestbed *bed, FuPlugin *pl
 	root->sysfs_parent = udev_mock_add_usb4_port(bed, 1);
 	g_assert_nonnull(root->sysfs_parent);
 
-	g_timeout_add(root->device->delay_ms, mock_tree_attach_device, root);
+	g_timeout_add_once(root->device->delay_ms, mock_tree_attach_device, root);
 
 	return mock_tree_settle(root, plugin);
 }
@@ -676,7 +676,7 @@ update_context_free(FuThunderboltUpdateContext *ctx)
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(FuThunderboltUpdateContext, update_context_free);
 #pragma clang diagnostic pop
 
-static gboolean
+static void
 reattach_tree(gpointer user_data)
 {
 	FuThunderboltUpdateContext *ctx = (FuThunderboltUpdateContext *)user_data;
@@ -685,9 +685,7 @@ reattach_tree(gpointer user_data)
 	g_debug("mock update done, reattaching tree…");
 
 	node->bed = g_object_ref(ctx->bed);
-	g_timeout_add(node->device->delay_ms, mock_tree_attach_device, node);
-
-	return G_SOURCE_REMOVE;
+	g_timeout_add_once(node->device->delay_ms, mock_tree_attach_device, node);
 }
 
 static void
@@ -738,7 +736,7 @@ udev_file_changed_cb(GFileMonitor *monitor,
 	}
 
 	g_debug("device tree reattachment in %3.2f seconds", ctx->timeout / 1000.0);
-	g_timeout_add(ctx->timeout, reattach_tree, ctx);
+	g_timeout_add_once(ctx->timeout, reattach_tree, ctx);
 }
 
 static FuThunderboltUpdateContext *
@@ -963,7 +961,8 @@ test_set_up(FuThunderboltTest *tt, gconstpointer params)
 		tt->fw_data = fu_firmware_write(firmware, &error);
 		g_assert_no_error(error);
 		g_assert_nonnull(tt->fw_data);
-		tt->fw_stream = fu_memory_input_stream_new_from_bytes(tt->fw_data);
+		tt->fw_stream =
+		    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(tt->fw_data));
 		g_assert_nonnull(tt->fw_stream);
 	}
 }

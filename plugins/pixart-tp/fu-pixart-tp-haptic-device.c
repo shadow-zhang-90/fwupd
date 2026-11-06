@@ -72,6 +72,11 @@ fu_pixart_tp_haptic_device_reg_write_verify_cb(FuDevice *device, gpointer user_d
 						     error))
 		return FALSE;
 
+	/* remain compatible with old emulations */
+	if (fu_device_has_flag(device, FWUPD_DEVICE_FLAG_EMULATED) &&
+	    !fu_device_check_fwupd_version(device, "2.1.7"))
+		return TRUE;
+
 	if (!fu_pixart_tp_device_register_user_read(FU_PIXART_TP_DEVICE(proxy),
 						    ctx->bank,
 						    ctx->addr,
@@ -572,10 +577,7 @@ fu_pixart_tp_haptic_device_tf_write_firmware(FuPixartTpHapticDevice *self,
 							 FU_PIXART_TP_TF_CMD_TOUCH_CONTROL,
 							 FU_PIXART_TP_TF_TOUCH_CONTROL_DISABLE,
 							 error)) {
-		g_set_error_literal(error,
-				    FWUPD_ERROR,
-				    FWUPD_ERROR_WRITE,
-				    "failed to disable touch");
+		g_prefix_error_literal(error, "failed to disable touch: ");
 		return FALSE;
 	}
 	fu_progress_step_done(progress);
@@ -585,10 +587,7 @@ fu_pixart_tp_haptic_device_tf_write_firmware(FuPixartTpHapticDevice *self,
 							 FU_PIXART_TP_TF_CMD_SET_UPGRADE_MODE,
 							 FU_PIXART_TP_TF_UPGRADE_MODE_ENTER_BOOT,
 							 error)) {
-		g_set_error_literal(error,
-				    FWUPD_ERROR,
-				    FWUPD_ERROR_WRITE,
-				    "failed to enter bootloader mode");
+		g_prefix_error_literal(error, "failed to enter bootloader mode: ");
 		return FALSE;
 	}
 	fu_device_sleep(FU_DEVICE(self), 100);
@@ -599,10 +598,7 @@ fu_pixart_tp_haptic_device_tf_write_firmware(FuPixartTpHapticDevice *self,
 							 FU_PIXART_TP_TF_CMD_SET_UPGRADE_MODE,
 							 FU_PIXART_TP_TF_UPGRADE_MODE_ERASE_FLASH,
 							 error)) {
-		g_set_error_literal(error,
-				    FWUPD_ERROR,
-				    FWUPD_ERROR_WRITE,
-				    "failed to send erase flash command");
+		g_prefix_error_literal(error, "failed to send erase flash command: ");
 		return FALSE;
 	}
 	fu_device_sleep(FU_DEVICE(self), 2000);
@@ -729,17 +725,8 @@ fu_pixart_tp_haptic_device_probe(FuDevice *device, GError **error)
 }
 
 static gboolean
-fu_pixart_tp_haptic_device_setup(FuDevice *device, GError **error)
+fu_pixart_tp_haptic_device_force_run_mode(FuPixartTpHapticDevice *self, GError **error)
 {
-	FuPixartTpHapticDevice *self = FU_PIXART_TP_HAPTIC_DEVICE(device);
-	guint8 major = 0;
-	guint8 minor = 0;
-	guint8 patch = 0;
-	gboolean tf_version_valid = FALSE;
-	g_autofree gchar *ver_str = NULL;
-	g_autoptr(GError) error_local = NULL;
-	g_autoptr(GError) error_version = NULL;
-
 	/*
 	 * workaround:
 	 * force the TP run mode to Force Run to prevent the TP from entering sleep during TF
@@ -776,6 +763,43 @@ fu_pixart_tp_haptic_device_setup(FuDevice *device, GError **error)
 		return FALSE;
 	}
 
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_pixart_tp_haptic_device_force_normal_mode(FuPixartTpHapticDevice *self, GError **error)
+{
+	fu_pixart_tp_haptic_device_reg_write_verify_best_effort(self,
+								FU_PIXART_TP_USER_BANK_BANK0,
+								FU_PIXART_TP_REG_USER0_RUN_MODE,
+								FU_PIXART_TP_RUN_MODE_AUTO);
+	fu_pixart_tp_haptic_device_reg_write_verify_best_effort(self,
+								FU_PIXART_TP_USER_BANK_BANK0,
+								FU_PIXART_TP_REG_USER0_PROXY_MODE,
+								FU_PIXART_TP_PROXY_MODE_NORMAL);
+	return TRUE;
+}
+
+static gboolean
+fu_pixart_tp_haptic_device_setup(FuDevice *device, GError **error)
+{
+	FuPixartTpHapticDevice *self = FU_PIXART_TP_HAPTIC_DEVICE(device);
+	guint8 major = 0;
+	guint8 minor = 0;
+	guint8 patch = 0;
+	gboolean tf_version_valid = FALSE;
+	g_autofree gchar *ver_str = NULL;
+	g_autoptr(GError) error_local = NULL;
+	g_autoptr(GError) error_version = NULL;
+
+	/* remain compatible with old emulations */
+	if (!fu_device_has_flag(device, FWUPD_DEVICE_FLAG_EMULATED) ||
+	    fu_device_check_fwupd_version(device, "2.1.7")) {
+		if (!fu_pixart_tp_haptic_device_force_run_mode(self, error))
+			return FALSE;
+	}
+
 	/* exit TF upgrade/engineer mode (best-effort) */
 	if (!fu_pixart_tp_haptic_device_tf_exit_upgrade_mode(self, &error_local)) {
 		g_debug("haptic: ignoring failure to exit TF upgrade mode in setup: %s",
@@ -804,15 +828,12 @@ fu_pixart_tp_haptic_device_setup(FuDevice *device, GError **error)
 	}
 
 	/* restore TP run mode and proxy mode to normal */
-	fu_pixart_tp_haptic_device_reg_write_verify_best_effort(self,
-								FU_PIXART_TP_USER_BANK_BANK0,
-								FU_PIXART_TP_REG_USER0_RUN_MODE,
-								FU_PIXART_TP_RUN_MODE_AUTO);
-	fu_pixart_tp_haptic_device_reg_write_verify_best_effort(self,
-								FU_PIXART_TP_USER_BANK_BANK0,
-								FU_PIXART_TP_REG_USER0_PROXY_MODE,
-								FU_PIXART_TP_PROXY_MODE_NORMAL);
-
+	/* remain compatible with old emulations */
+	if (!fu_device_has_flag(device, FWUPD_DEVICE_FLAG_EMULATED) ||
+	    fu_device_check_fwupd_version(device, "2.1.7")) {
+		if (!fu_pixart_tp_haptic_device_force_normal_mode(self, error))
+			return FALSE;
+	}
 	if (!tf_version_valid) {
 		fu_device_set_version(device, "0.0.0");
 		return TRUE;
@@ -1009,6 +1030,7 @@ fu_pixart_tp_haptic_device_init(FuPixartTpHapticDevice *self)
 	fu_device_set_name(FU_DEVICE(self), "Touchpad Haptic");
 	fu_device_set_summary(FU_DEVICE(self), "Force/haptic controller for touchpad");
 	fu_device_set_proxy_gtype(FU_DEVICE(self), FU_TYPE_PIXART_TP_DEVICE);
+	fu_device_set_firmware_gtype(FU_DEVICE(self), FU_TYPE_PIXART_TP_SECTION);
 	fu_device_add_icon(FU_DEVICE(self), "input-touchpad");
 }
 

@@ -10,16 +10,17 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
 try:
-    from jinja2 import Environment, Template
+    from jinja2 import Environment
 except ImportError:
     print(
         "Error: jinja2 is required for this script. Install it with: pip install jinja2"
     )
-    exit(1)
+    sys.exit(1)
 
 
 @contextlib.contextmanager
@@ -89,7 +90,7 @@ def make_firmware_metainfo(firmware_info, dst):
         )
 
     # Parse release features into a list for template iteration
-    if "release_features" in local_info and local_info["release_features"]:
+    if local_info.get("release_features"):
         features = local_info["release_features"]
         # Handle both string (with | delimiter) and list inputs
         if isinstance(features, str):
@@ -112,7 +113,7 @@ def make_firmware_metainfo(firmware_info, dst):
         local_info["release_features"] = []
 
     # Parse firmware categories into a list for template iteration
-    if "firmware_category" in local_info and local_info["firmware_category"]:
+    if local_info.get("firmware_category"):
         categories = local_info["firmware_category"]
         # Handle both string (with | delimiter) and list inputs
         if isinstance(categories, str):

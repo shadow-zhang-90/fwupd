@@ -64,7 +64,6 @@ if libcrypto.found()
 endif
 
 if giounix.found()
-  fwupd_engine_src += 'fu-unix-seekable-input-stream.c'
   fwupd_engine_src += 'fu-engine-installer.c'
 endif
 if host_machine.system() in ['linux', 'android']
@@ -72,6 +71,7 @@ if host_machine.system() in ['linux', 'android']
 endif
 if bluez.allowed()
   fwupd_engine_src += 'fu-bluez-backend.c'
+  fwupd_engine_src += 'fu-bluez-device.c'
 endif
 
 # include event message file
@@ -114,11 +114,11 @@ fwupdcli = library(
     'fu-cli.c',
     systemd_src,
   ],
-  install: true,
+  install: get_option('default_library') != 'static',
   install_rpath: libdir_pkg,
   install_dir: libdir_pkg,
   include_directories: [root_incdir, fwupd_incdir, fwupdplugin_incdir],
-  dependencies: [client_dep],
+  dependencies: [client_dep, giounix],
   link_with: [fwupd, fwupdplugin],
 )
 
@@ -149,6 +149,42 @@ if build_daemon == 'dbus'
     install_rpath: libdir_pkg,
     install_dir: bindir,
   )
+endif
+
+if tui.allowed()
+  fwupdtui_conf = configuration_data()
+  fwupdtui_conf.set('FWUPD_VERSION', fwupd_version)
+  fwupdtui_conf.set('libdir', libdir)
+  fwupdtui_conf.set('localedir', localedir)
+  fwupdtui = configure_file(
+    input: 'fwupdtui/fwupdtui.py',
+    output: 'fwupdtui',
+    configuration: fwupdtui_conf,
+    install: true,
+    install_dir: bindir,
+    install_mode: 'rwxr-xr-x',
+    install_tag: 'runtime',
+  )
+  if get_option('tests')
+    fwupdtui_test_env = environment()
+    fwupdtui_test_env.set('G_DEBUG', 'fatal-criticals')
+    fwupdtui_test_env.prepend('PYTHONPATH', meson.current_source_dir() / 'fwupdtui')
+    fwupdtui_test_env.prepend(
+      'GI_TYPELIB_PATH',
+      join_paths(meson.project_build_root(), 'libfwupd'),
+    )
+    fwupdtui_test_env.prepend(
+      'LD_LIBRARY_PATH',
+      join_paths(meson.project_build_root(), 'libfwupd'),
+    )
+    test(
+      'fwupdtui-test',
+      python3,
+      args: ['-m', 'pytest', files('fwupdtui/test_fwupdtui.py')],
+      depends: fwupd_gir[1],
+      env: fwupdtui_test_env,
+    )
+  endif
 endif
 
 if build_daemon == 'dbus'
@@ -203,7 +239,7 @@ fwupdengine = library(
   resources_src,
   plugins_hdr,
   sources: fwupd_engine_src,
-  install: true,
+  install: get_option('default_library') != 'static',
   install_rpath: libdir_pkg,
   install_dir: libdir_pkg,
   include_directories: plugin_incdirs,
@@ -265,6 +301,25 @@ if build_daemon != 'none'
     )
     man_md += ['"fwupdmgr.md"']
   endif
+endif
+if tui.allowed() and get_option('man')
+  custom_target(
+    'fwupdtui.1',
+    input: 'fwupdtui.md',
+    output: 'fwupdtui.1',
+    command: [
+      generate_man,
+      '@INPUT@',
+      '-o',
+      '@OUTPUT@',
+      '--replace',
+      'PACKAGE_VERSION',
+      fwupd_version,
+    ],
+    install: true,
+    install_tag: 'man',
+    install_dir: join_paths(mandir, 'man1'),
+  )
 endif
 if build_standalone
   if get_option('man')
@@ -335,6 +390,12 @@ if build_daemon == 'binder'
     native: false,
   )
 
+  if get_option('binder_vintf_stability')
+    binder_stability_args = ['-DBINDER_STABILITY_SUPPORT']
+  else
+    binder_stability_args = []
+  endif
+
   aidl_prog = find_program(
     'aidl',
     required: true,
@@ -353,10 +414,14 @@ if build_daemon == 'binder'
     'FwupdHwid',
     'FwupdInstallRequest',
     'FwupdMetadata',
+    'FwupdPlugin',
     'FwupdProperties',
     'FwupdRelease',
     'FwupdRemote',
     'FwupdRequest',
+    'FwupdKeyValue',
+    'FwupdBiosSetting',
+    'FwupdSecurityAttr',
   ]
 
   # the interface AIDL files generate C++ with global constructors that call
@@ -429,8 +494,8 @@ if build_daemon == 'binder'
     install: true,
     install_rpath: libdir_pkg,
     install_dir: daemon_dir,
-    c_args: ['-DBINDER_STABILITY_SUPPORT'],
-    cpp_args: ['-DBINDER_STABILITY_SUPPORT'],
+    c_args: binder_stability_args,
+    cpp_args: binder_stability_args,
     # needed for AIBinder_markVintfStability
     link_args: ['-Wl,--unresolved-symbols=ignore-in-object-files'],
   )
@@ -460,8 +525,8 @@ if build_daemon == 'binder'
       fwupdplugin,
       fwupdcli,
     ],
-    c_args: ['-DBINDER_STABILITY_SUPPORT'],
-    cpp_args: ['-DBINDER_STABILITY_SUPPORT'],
+    c_args: binder_stability_args,
+    cpp_args: binder_stability_args,
     link_language: 'cpp',
     install: true,
     install_rpath: libdir_pkg,
@@ -518,6 +583,7 @@ if get_option('tests')
     'engine',
     'engine-gtypes',
     'engine-helper',
+    'engine-request',
     'engine-requirements',
     'engine-udev',
     'history',
@@ -526,13 +592,15 @@ if get_option('tests')
     'release',
     'remote',
     'remote-list',
+    'security-attr-common',
+    'uefi-backend',
     'usb-backend',
   ]
+  if bluez.allowed()
+    test_names += 'bluez-device'
+  endif
   if jcat_crypto in ['gnutls', 'libcrypto']
     test_names += 'jcat'
-  endif
-  if giounix.found()
-    test_names += 'unix-seekable-input-stream'
   endif
   foreach test_name : test_names
     e = executable(

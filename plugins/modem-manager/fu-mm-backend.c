@@ -13,6 +13,7 @@
 #include "fu-mm-fdl-device.h"
 #include "fu-mm-firehose-device.h"
 #include "fu-mm-mbim-device.h"
+#include "fu-mm-mhi-firehose-device.h"
 #include "fu-mm-mhi-qcdm-device.h"
 #include "fu-mm-qcdm-device.h"
 #include "fu-mm-qdu-mbim-device.h"
@@ -129,7 +130,7 @@ fu_mm_backend_probe_gtype_fallback(FuMmBackend *self, MMObject *omodem, GError *
 	MMModemFirmwareUpdateMethod update_methods;
 	MMModemPortInfo *used_ports = NULL;
 	guint n_used_ports = 0;
-#if MM_CHECK_VERSION(1, 26, 0)
+#if MM_CHECK_VERSION(1, 25, 1)
 	MMModemPortInfo *ignored_ports = NULL;
 	guint n_ignored_ports = 0;
 #endif
@@ -192,6 +193,11 @@ fu_mm_backend_probe_gtype_fallback(FuMmBackend *self, MMObject *omodem, GError *
 		MM_MODEM_PORT_TYPE_AT,
 		MM_MODEM_FIRMWARE_UPDATE_METHOD_DFOTA,
 	    },
+	    {
+		FU_TYPE_MM_MHI_FIREHOSE_DEVICE,
+		MM_MODEM_PORT_TYPE_IGNORED,
+		MM_MODEM_FIRMWARE_UPDATE_METHOD_FIREHOSE,
+	    },
 	};
 
 	modem_fw = mm_object_peek_modem_firmware(omodem);
@@ -215,7 +221,7 @@ fu_mm_backend_probe_gtype_fallback(FuMmBackend *self, MMObject *omodem, GError *
 		mm_modem_port_info_array_free(used_ports, n_used_ports);
 	}
 
-#if MM_CHECK_VERSION(1, 26, 0)
+#if MM_CHECK_VERSION(1, 25, 1)
 	if (mm_modem_get_ignored_ports(modem, &ignored_ports, &n_ignored_ports)) {
 		for (guint i = 0; i < n_ignored_ports; i++) {
 			g_debug("found port %s: %s",

@@ -67,7 +67,7 @@ fu_uefi_dbx_device_set_checksum(FuUefiDbxDevice *self, const gchar *csum, GError
 		return FALSE;
 
 	/* this makes debugging easier */
-	if (fu_device_get_version(FU_DEVICE(self)) == NULL) {
+	if (fu_device_get_version_raw(FU_DEVICE(self)) == 0) {
 		g_autofree gchar *csum_trunc = g_strndup(csum, 8);
 		g_autofree gchar *summary =
 		    g_strdup_printf("UEFI revocation database %s", csum_trunc);
@@ -99,8 +99,6 @@ fu_uefi_dbx_device_ensure_checksum(FuUefiDbxDevice *self, GError **error)
 			g_propagate_error(error, g_steal_pointer(&error_local));
 			return FALSE;
 		}
-		g_debug("dbx variable not found, creating a fake dbx");
-		sigs = g_ptr_array_new();
 	} else {
 		if (!fu_firmware_parse_bytes(dbx,
 					     dbx_blob,
@@ -109,6 +107,13 @@ fu_uefi_dbx_device_ensure_checksum(FuUefiDbxDevice *self, GError **error)
 					     error))
 			return FALSE;
 		sigs = fu_firmware_get_images(dbx);
+	}
+
+	/* special entry for "empty" */
+	if (sigs == NULL) {
+		g_debug("dbx variable not found, creating a fake dbx");
+		fu_device_set_version_raw(FU_DEVICE(self), 0);
+		return TRUE;
 	}
 
 	/* add the last checksum to the device */
@@ -121,6 +126,10 @@ fu_uefi_dbx_device_ensure_checksum(FuUefiDbxDevice *self, GError **error)
 		if (csum == NULL)
 			continue;
 
+		if (g_strcmp0(owner, FU_EFI_SIGNATURE_GUID_ZERO) == 0) {
+			fu_device_set_version_raw(FU_DEVICE(self), 0);
+			continue;
+		}
 		if (g_strcmp0(owner, FU_EFI_SIGNATURE_GUID_MICROSOFT) != 0) {
 			g_debug("skipping dbx entry %s as non-microsoft (%s)", csum, owner);
 			continue;
@@ -131,14 +140,6 @@ fu_uefi_dbx_device_ensure_checksum(FuUefiDbxDevice *self, GError **error)
 				return FALSE;
 			break;
 		}
-	}
-
-	/* special entry for "empty" */
-	if (sigs->len == 1) {
-		FuEfiSignature *sig = g_ptr_array_index(sigs, 0);
-		const gchar *owner = fu_efi_signature_get_owner(sig);
-		if (g_strcmp0(owner, FU_EFI_SIGNATURE_GUID_ZERO) == 0)
-			fu_device_set_version_raw(FU_DEVICE(self), 0);
 	}
 
 	/* success */
@@ -175,11 +176,11 @@ fu_uefi_dbx_device_prepare_firmware(FuDevice *device,
 				    GError **error)
 {
 	FuContext *ctx = fu_device_get_context(device);
-	g_autoptr(FuFirmware) firmware = fu_firmware_new();
-	g_autoptr(FuFirmware) siglist = fu_efi_signature_list_new();
+	g_autoptr(FuFirmware) firmware = g_object_new(FU_TYPE_EFI_VARIABLE_AUTHENTICATION2, NULL);
 
-	/* parse dbx */
-	if (!fu_firmware_parse_stream(siglist, stream, 0x0, flags, error)) {
+	/* parse dbx, preserving the concrete GType so that other
+	 * plugins can introspect the payload */
+	if (!fu_firmware_parse_stream(firmware, stream, 0x0, flags, error)) {
 		g_prefix_error_literal(error, "cannot parse DBX update: ");
 		return NULL;
 	}
@@ -188,7 +189,7 @@ fu_uefi_dbx_device_prepare_firmware(FuDevice *device,
 	if ((flags & FWUPD_INSTALL_FLAG_FORCE) == 0) {
 		fu_progress_set_status(progress, FWUPD_STATUS_DEVICE_VERIFY);
 		if (!fu_uefi_dbx_signature_list_validate(ctx,
-							 FU_EFI_SIGNATURE_LIST(siglist),
+							 FU_EFI_SIGNATURE_LIST(firmware),
 							 flags,
 							 error)) {
 			g_prefix_error_literal(error,
@@ -198,9 +199,6 @@ fu_uefi_dbx_device_prepare_firmware(FuDevice *device,
 		}
 	}
 
-	/* default blob */
-	if (!fu_firmware_parse_stream(firmware, stream, 0x0, flags, error))
-		return NULL;
 	return g_steal_pointer(&firmware);
 }
 

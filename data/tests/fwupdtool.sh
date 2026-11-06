@@ -29,7 +29,7 @@ expect_rc() {
 }
 
 run() {
-    cmd="fwupdtool -v --plugins test $*"
+    cmd="fwupdtool -v --plugins test --plugins linux-fwattr $*"
     echo " ● cmd: $cmd" >fwupdtool.txt
     $cmd 1>>fwupdtool.txt 2>&1
 }
@@ -59,16 +59,15 @@ echo " ● Exporting hwids"
 run export-hwids ${TMPDIR}/hwids.ini
 expect_rc 0
 
-UNAME=$(uname -m)
-if [ "${UNAME}" = "x86_64" ] || [ "${UNAME}" = "i686" ]; then
-    EXPECTED=0
-else
-    EXPECTED=1
-fi
+# ---
+echo " ● Importing hwids"
+run import-hwids ${TMPDIR}/hwids.ini
+expect_rc 0
+
 # ---
 echo " ● Showing security"
 run security
-expect_rc $EXPECTED
+expect_rc 0
 
 # ---
 echo " ● Showing plugins"
@@ -153,7 +152,7 @@ expect_rc 0
 # ---
 echo " ● Modify unknown remote (should fail)…"
 run modify-remote foo Enabled true
-expect_rc 1
+expect_rc 3
 
 # ---
 echo " ● Modify known remote but unknown key (should fail)…"
@@ -312,7 +311,7 @@ expect_rc 0
 # ---
 echo " ● Installing blob…"
 echo " ● 0.0.0" >${TMPDIR}/blob.bin
-run install-blob ${TMPDIR}/blob.bin ${DEVICE}
+run write-blob ${TMPDIR}/blob.bin ${DEVICE}
 expect_rc 0
 
 # ---

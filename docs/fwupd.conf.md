@@ -93,6 +93,14 @@ The `[fwupd]` section can contain the following parameters:
 
   Ignore power levels of devices when running updates.
 
+**AllowFilenameHintForLocal={{AllowFilenameHintForLocal}}**
+
+  Read the archive from an enabled directory remote using the install filename hint.
+  This is required if the process installing local firmware does not have access to the files from
+  the directory remote, but the daemon does.
+
+  If this option is enabled and the filename hint matches then the passed file descriptor is ignored.
+
 **IgnoreRequirements={{IgnoreRequirements}}**
 
   Ignore some device requirements, for instance removing the generic GUID requirement of a CHID,
@@ -326,6 +334,9 @@ The `[redfish]` section can contain the following parameters:
 **BearerToken={{redfish_BearerToken}}**
 
   The bearer token to use for authenticating to the Redfish service.
+
+  When set, it is used instead of `Username=` and `Password=` for HTTP authentication, and the
+  plugin will not create or modify a BMC user account using IPMI.
 
 **SessionKeyFile={{redfish_SessionKeyFile}}**
 

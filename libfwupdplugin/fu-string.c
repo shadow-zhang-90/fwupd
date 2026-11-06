@@ -276,7 +276,7 @@ fu_strstrip(const gchar *str)
 
 	/* find first non-space char */
 	for (guint i = 0; str[i] != '\0'; i++) {
-		if (str[i] != ' ') {
+		if (!g_ascii_isspace(str[i])) {
 			head = i;
 			break;
 		}
@@ -522,7 +522,7 @@ fu_strsplit_stream(FuInputStream *stream,
 	    .token_idx = 0,
 	};
 
-	g_return_val_if_fail(FU_IS_INPUT_STREAM(stream), FALSE);
+	g_return_val_if_fail(FWUPD_IS_INPUT_STREAM(stream), FALSE);
 	g_return_val_if_fail(delimiter != NULL && delimiter[0] != '\0', FALSE);
 	g_return_val_if_fail(callback != NULL, FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
@@ -601,7 +601,7 @@ fu_strsplit_full(const gchar *str,
 
 	/* cannot split */
 	if (delimiter_sz > str_sz) {
-		g_autoptr(GString) token = g_string_new(str);
+		g_autoptr(GString) token = g_string_new_len(str, str_sz);
 		return callback(token, token_idx, user_data, error);
 	}
 
@@ -611,7 +611,8 @@ fu_strsplit_full(const gchar *str,
 		g_autoptr(GString) token = g_string_new(NULL);
 
 		for (offset = offset_old; offset < str_sz; offset++) {
-			if (strncmp(str + offset, delimiter, delimiter_sz) == 0)
+			if (offset + delimiter_sz <= str_sz &&
+			    strncmp(str + offset, delimiter, delimiter_sz) == 0)
 				break;
 		}
 		g_string_append_len(token, str + offset_old, offset - offset_old);

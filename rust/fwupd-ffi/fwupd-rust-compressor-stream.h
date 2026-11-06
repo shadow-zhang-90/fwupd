@@ -12,20 +12,17 @@
 
 #include <glib.h>
 
+#include "fwupd-compressor-private.h"
 #include "fwupd-rust-streams.h"
 
-#include "fu-compressor-struct.h"
-
 G_BEGIN_DECLS
-
-G_STATIC_ASSERT(sizeof(FuCompressorFormat) == 4);
 
 typedef struct FuRsCompressorStream FuRsCompressorStream;
 typedef struct FuRsDecompressorStream FuRsDecompressorStream;
 
 FuRsCompressorStream *
 fu_rs_compressor_stream_new_compress(FuRsStreamImpl *base_stream,
-				     FuCompressorFormat format,
+				     FwupdCompressorFormat format,
 				     GError **error);
 gssize
 fu_rs_compressor_stream_read(FuRsCompressorStream *stream, guint8 *buf, gsize count);
@@ -34,11 +31,11 @@ fu_rs_compressor_stream_can_seek(FuRsCompressorStream *stream);
 void
 fu_rs_compressor_stream_free(FuRsCompressorStream *stream);
 FuRsStreamImpl *
-fu_rs_compressor_stream_get_stream_impl(const FuRsCompressorStream *stream);
+fu_rs_compressor_stream_get_impl(const FuRsCompressorStream *stream);
 
 FuRsDecompressorStream *
 fu_rs_compressor_stream_new_decompress(FuRsStreamImpl *base_stream,
-				       FuCompressorFormat format,
+				       FwupdCompressorFormat format,
 				       GError **error);
 gssize
 fu_rs_decompressor_stream_read(FuRsDecompressorStream *stream, guint8 *buf, gsize count);
@@ -47,6 +44,6 @@ fu_rs_decompressor_stream_can_seek(FuRsDecompressorStream *stream);
 void
 fu_rs_decompressor_stream_free(FuRsDecompressorStream *stream);
 FuRsStreamImpl *
-fu_rs_decompressor_stream_get_stream_impl(const FuRsDecompressorStream *stream);
+fu_rs_decompressor_stream_get_impl(const FuRsDecompressorStream *stream);
 
 G_END_DECLS

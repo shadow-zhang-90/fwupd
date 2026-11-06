@@ -15,6 +15,9 @@
 #include "fwupd-client.h"
 #include "fwupd-common-private.h"
 #include "fwupd-error.h"
+#include "fwupd-remote-private.h"
+
+#define FWUPD_CLIENT_HOST_SECURITY_EVENTS_MAX 10000
 
 typedef struct {
 	gboolean ret;
@@ -176,6 +179,10 @@ fwupd_client_quit(FwupdClient *self, GCancellable *cancellable, GError **error)
 	g_return_val_if_fail(FWUPD_IS_CLIENT(self), FALSE);
 	g_return_val_if_fail(cancellable == NULL || G_IS_CANCELLABLE(cancellable), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+	/* connect */
+	if (!fwupd_client_connect(self, cancellable, error))
+		return FALSE;
 
 	if (impl->quit == NULL) {
 		g_set_error_literal(error,
@@ -725,21 +732,23 @@ fwupd_client_get_details_cb(GObject *source, GAsyncResult *res, gpointer user_da
 
 GPtrArray *
 fwupd_client_sync_impl_get_details(FwupdClient *self,
-				   const gchar *filename,
+				   FwupdInputStream *stream,
 				   gpointer user_data,
 				   GCancellable *cancellable,
 				   GError **error)
 {
 #ifdef HAVE_GIO_UNIX
-	g_autoptr(GUnixInputStream) istr = NULL;
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
 	g_autoptr(FwupdClientHelper) helper = fwupd_client_helper_new(self);
 
-	/* call async version and run loop until complete */
-	istr = fwupd_unix_input_stream_from_fn(filename, error);
-	if (istr == NULL)
+	/* convert to somethng with a fd */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
 		return NULL;
+
+	/* call async version and run loop until complete */
 	fwupd_client_get_details_stream_async(self,
-					      istr,
+					      ustream,
 					      cancellable,
 					      fwupd_client_get_details_cb,
 					      helper);
@@ -779,6 +788,7 @@ fwupd_client_get_details(FwupdClient *self,
 {
 	gpointer impl_userdata = NULL;
 	const FwupdClientSyncImpl *impl = fwupd_client_get_sync_impl(self, &impl_userdata);
+	g_autoptr(FwupdInputStream) stream = NULL;
 
 	g_return_val_if_fail(FWUPD_IS_CLIENT(self), NULL);
 	g_return_val_if_fail(filename != NULL, NULL);
@@ -789,6 +799,10 @@ fwupd_client_get_details(FwupdClient *self,
 	if (!fwupd_client_connect(self, cancellable, error))
 		return NULL;
 
+	/* load as FwupdUnixInputStream, but fall back to FuMemoryInputStream */
+	stream = fwupd_input_stream_from_fn(filename, error);
+	if (stream == NULL)
+		return FALSE;
 	if (impl->get_details == NULL) {
 		g_set_error_literal(error,
 				    FWUPD_ERROR,
@@ -796,7 +810,7 @@ fwupd_client_get_details(FwupdClient *self,
 				    "no FwupdClientSyncImpl->get_details");
 		return NULL;
 	}
-	return impl->get_details(self, filename, impl_userdata, cancellable, error);
+	return impl->get_details(self, stream, impl_userdata, cancellable, error);
 }
 
 static void
@@ -1555,7 +1569,7 @@ fwupd_client_sync_impl_modify_bios_setting(FwupdClient *self,
 /**
  * fwupd_client_modify_bios_setting
  * @self: a #FwupdClient
- * @settings: (transfer container): BIOS settings
+ * @settings: (element-type utf8 utf8) (transfer none): BIOS settings
  * @cancellable: (nullable): optional #GCancellable
  * @error: (nullable): optional return location for an error
  *
@@ -1784,6 +1798,17 @@ fwupd_client_get_host_security_events(FwupdClient *self,
 	g_return_val_if_fail(cancellable == NULL || G_IS_CANCELLABLE(cancellable), NULL);
 	g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
+	/* sanity check */
+	if (limit > FWUPD_CLIENT_HOST_SECURITY_EVENTS_MAX) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_INVALID_DATA,
+			    "limit of %u is too large, maximum is %u",
+			    limit,
+			    (guint)FWUPD_CLIENT_HOST_SECURITY_EVENTS_MAX);
+		return NULL;
+	}
+
 	/* connect */
 	if (!fwupd_client_connect(self, cancellable, error))
 		return NULL;
@@ -1958,26 +1983,27 @@ fwupd_client_install_fd_cb(GObject *source, GAsyncResult *res, gpointer user_dat
 gboolean
 fwupd_client_sync_impl_install(FwupdClient *self,
 			       const gchar *device_id,
-			       const gchar *filename,
+			       FwupdInputStream *stream,
+			       const gchar *filename_hint,
 			       FwupdInstallFlags install_flags,
 			       gpointer user_data,
 			       GCancellable *cancellable,
 			       GError **error)
 {
 #ifdef HAVE_GIO_UNIX
-	g_autoptr(GUnixInputStream) istr = NULL;
 	g_autoptr(FwupdClientHelper) helper = fwupd_client_helper_new(self);
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
 
-	/* move to a thread if this ever takes more than a few ms */
-	istr = fwupd_unix_input_stream_from_fn(filename, error);
-	if (istr == NULL)
+	/* convert to somethng with a fd */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
 		return FALSE;
 
 	/* call async version and run loop until complete */
 	fwupd_client_install_stream_async(self,
 					  device_id,
-					  istr,
-					  filename,
+					  ustream,
+					  filename_hint,
 					  install_flags,
 					  cancellable,
 					  fwupd_client_install_fd_cb,
@@ -2022,6 +2048,7 @@ fwupd_client_install(FwupdClient *self,
 {
 	gpointer impl_userdata = NULL;
 	const FwupdClientSyncImpl *impl = fwupd_client_get_sync_impl(self, &impl_userdata);
+	g_autoptr(FwupdInputStream) stream = NULL;
 
 	g_return_val_if_fail(FWUPD_IS_CLIENT(self), FALSE);
 	g_return_val_if_fail(device_id != NULL, FALSE);
@@ -2033,6 +2060,10 @@ fwupd_client_install(FwupdClient *self,
 	if (!fwupd_client_connect(self, cancellable, error))
 		return FALSE;
 
+	/* load as FwupdUnixInputStream, but fall back to FuMemoryInputStream */
+	stream = fwupd_input_stream_from_fn(filename, error);
+	if (stream == NULL)
+		return FALSE;
 	if (impl->install == NULL) {
 		g_set_error_literal(error,
 				    FWUPD_ERROR,
@@ -2040,8 +2071,118 @@ fwupd_client_install(FwupdClient *self,
 				    "no FwupdClientSyncImpl->install");
 		return FALSE;
 	}
-	return impl
-	    ->install(self, device_id, filename, install_flags, impl_userdata, cancellable, error);
+	return impl->install(self,
+			     device_id,
+			     stream,
+			     filename,
+			     install_flags,
+			     impl_userdata,
+			     cancellable,
+			     error);
+}
+
+gboolean
+fwupd_client_sync_impl_write_blob(FwupdClient *self,
+				  const gchar *device_id,
+				  FwupdInputStream *stream,
+				  const gchar *filename_hint,
+				  const gchar *version,
+				  gpointer user_data,
+				  GCancellable *cancellable,
+				  GError **error)
+{
+#ifdef HAVE_GIO_UNIX
+	g_autoptr(FwupdClientHelper) helper = fwupd_client_helper_new(self);
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
+
+	/* convert to something with a fd */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
+		return FALSE;
+
+	/* call async version and run loop until complete */
+	fwupd_client_write_blob_stream_async(self,
+					     device_id,
+					     ustream,
+					     filename_hint,
+					     version,
+					     cancellable,
+					     fwupd_client_install_fd_cb,
+					     helper);
+	g_main_loop_run(helper->loop);
+	if (!helper->ret) {
+		g_propagate_error(error, g_steal_pointer(&helper->error));
+		return FALSE;
+	}
+	return TRUE;
+#else
+	g_set_error_literal(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_NOT_SUPPORTED,
+			    "Install blob only supported on Linux");
+	return FALSE;
+#endif
+}
+
+/**
+ * fwupd_client_write_blob:
+ * @self: a #FwupdClient
+ * @device_id: (not nullable): the device ID
+ * @filename: (not nullable): the firmware blob to install
+ * @version: (nullable): the version to use if the firmware does not specify one
+ * @cancellable: (nullable): optional #GCancellable
+ * @error: (nullable): optional return location for an error
+ *
+ * Write a firmware blob that is not in a cabinet archive onto a specific programmer target.
+ *
+ * As there is no metadata, no signature, requirement or version checks are done, and the daemon
+ * always requires admin authentication.
+ *
+ * Returns: %TRUE for success
+ *
+ * Since: 2.2.1
+ **/
+gboolean
+fwupd_client_write_blob(FwupdClient *self,
+			const gchar *device_id,
+			const gchar *filename,
+			const gchar *version,
+			GCancellable *cancellable,
+			GError **error)
+{
+	gpointer impl_userdata = NULL;
+	const FwupdClientSyncImpl *impl = fwupd_client_get_sync_impl(self, &impl_userdata);
+	g_autoptr(FwupdInputStream) stream = NULL;
+
+	g_return_val_if_fail(FWUPD_IS_CLIENT(self), FALSE);
+	g_return_val_if_fail(device_id != NULL, FALSE);
+	g_return_val_if_fail(filename != NULL, FALSE);
+	g_return_val_if_fail(cancellable == NULL || G_IS_CANCELLABLE(cancellable), FALSE);
+	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+	/* connect */
+	if (!fwupd_client_connect(self, cancellable, error))
+		return FALSE;
+
+	/* load as FwupdUnixInputStream, but fall back to FuMemoryInputStream */
+	stream = fwupd_input_stream_from_fn(filename, error);
+	if (stream == NULL)
+		return FALSE;
+	if (impl->write_blob == NULL) {
+		g_set_error_literal(error,
+				    FWUPD_ERROR,
+				    FWUPD_ERROR_NOT_SUPPORTED,
+				    "no FwupdClientSyncImpl->write_blob");
+		return FALSE;
+	}
+	return impl->write_blob(self,
+				device_id,
+				stream,
+				filename,
+				version,
+				impl_userdata,
+				cancellable,
+				error);
 }
 
 static void
@@ -2210,29 +2351,30 @@ fwupd_client_update_metadata_cb(GObject *source, GAsyncResult *res, gpointer use
 gboolean
 fwupd_client_sync_impl_update_metadata(FwupdClient *self,
 				       const gchar *remote_id,
-				       const gchar *metadata_fn,
-				       const gchar *signature_fn,
+				       FwupdInputStream *stream,
+				       FwupdInputStream *stream_sig,
 				       gpointer user_data,
 				       GCancellable *cancellable,
 				       GError **error)
 {
 #ifdef HAVE_GIO_UNIX
-	g_autoptr(GUnixInputStream) istr = NULL;
-	g_autoptr(GUnixInputStream) istr_sig = NULL;
 	g_autoptr(FwupdClientHelper) helper = fwupd_client_helper_new(self);
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
+	g_autoptr(FwupdUnixInputStream) ustream_sig = NULL;
 
-	istr = fwupd_unix_input_stream_from_fn(metadata_fn, error);
-	if (istr == NULL)
+	/* convert the FuInputStream into a FuUnixInputStream */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
 		return FALSE;
-	istr_sig = fwupd_unix_input_stream_from_fn(signature_fn, error);
-	if (istr_sig == NULL)
+	ustream_sig = fwupd_unix_input_stream_from_stream(stream_sig, error);
+	if (ustream_sig == NULL)
 		return FALSE;
 
 	/* call async version and run loop until complete */
 	fwupd_client_update_metadata_stream_async(self,
 						  remote_id,
-						  istr,
-						  istr_sig,
+						  ustream,
+						  ustream_sig,
 						  cancellable,
 						  fwupd_client_update_metadata_cb,
 						  helper);
@@ -2249,6 +2391,37 @@ fwupd_client_sync_impl_update_metadata(FwupdClient *self,
 			    "Update metadata only supported on Linux");
 	return FALSE;
 #endif
+}
+
+static gboolean
+fwupd_client_update_metadata_stream(FwupdClient *self,
+				    const gchar *remote_id,
+				    FwupdInputStream *stream,
+				    FwupdInputStream *stream_sig,
+				    GCancellable *cancellable,
+				    GError **error)
+{
+	gpointer impl_userdata = NULL;
+	const FwupdClientSyncImpl *impl = fwupd_client_get_sync_impl(self, &impl_userdata);
+
+	/* connect */
+	if (!fwupd_client_connect(self, cancellable, error))
+		return FALSE;
+
+	if (impl->update_metadata == NULL) {
+		g_set_error_literal(error,
+				    FWUPD_ERROR,
+				    FWUPD_ERROR_NOT_SUPPORTED,
+				    "no FwupdClientSyncImpl->update_metadata");
+		return FALSE;
+	}
+	return impl->update_metadata(self,
+				     remote_id,
+				     stream,
+				     stream_sig,
+				     impl_userdata,
+				     cancellable,
+				     error);
 }
 
 /**
@@ -2279,8 +2452,8 @@ fwupd_client_update_metadata(FwupdClient *self,
 			     GCancellable *cancellable,
 			     GError **error)
 {
-	gpointer impl_userdata = NULL;
-	const FwupdClientSyncImpl *impl = fwupd_client_get_sync_impl(self, &impl_userdata);
+	g_autoptr(FwupdInputStream) stream = NULL;
+	g_autoptr(FwupdInputStream) stream_sig = NULL;
 
 	g_return_val_if_fail(FWUPD_IS_CLIENT(self), FALSE);
 	g_return_val_if_fail(remote_id != NULL, FALSE);
@@ -2289,24 +2462,19 @@ fwupd_client_update_metadata(FwupdClient *self,
 	g_return_val_if_fail(cancellable == NULL || G_IS_CANCELLABLE(cancellable), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-	/* connect */
-	if (!fwupd_client_connect(self, cancellable, error))
+	/* load as FwupdUnixInputStream, but fall back to FuMemoryInputStream */
+	stream = fwupd_input_stream_from_fn(metadata_fn, error);
+	if (stream == NULL)
 		return FALSE;
-
-	if (impl->update_metadata == NULL) {
-		g_set_error_literal(error,
-				    FWUPD_ERROR,
-				    FWUPD_ERROR_NOT_SUPPORTED,
-				    "no FwupdClientSyncImpl->update_metadata");
+	stream_sig = fwupd_input_stream_from_fn(signature_fn, error);
+	if (stream_sig == NULL)
 		return FALSE;
-	}
-	return impl->update_metadata(self,
-				     remote_id,
-				     metadata_fn,
-				     signature_fn,
-				     impl_userdata,
-				     cancellable,
-				     error);
+	return fwupd_client_update_metadata_stream(self,
+						   remote_id,
+						   stream,
+						   stream_sig,
+						   cancellable,
+						   error);
 }
 
 static void
@@ -2376,39 +2544,6 @@ fwupd_client_update_metadata_bytes(FwupdClient *self,
 	return TRUE;
 }
 
-static void
-fwupd_client_refresh_remote_cb(GObject *source, GAsyncResult *res, gpointer user_data)
-{
-	FwupdClientHelper *helper = (FwupdClientHelper *)user_data;
-	helper->ret = fwupd_client_refresh_remote_finish(FWUPD_CLIENT(source), res, &helper->error);
-	g_main_loop_quit(helper->loop);
-}
-
-gboolean
-fwupd_client_sync_impl_refresh_remote(FwupdClient *self,
-				      FwupdRemote *remote,
-				      FwupdClientDownloadFlags download_flags,
-				      gpointer user_data,
-				      GCancellable *cancellable,
-				      GError **error)
-{
-	g_autoptr(FwupdClientHelper) helper = fwupd_client_helper_new(self);
-
-	/* call async version and run loop until complete */
-	fwupd_client_refresh_remote_async(self,
-					  remote,
-					  download_flags,
-					  cancellable,
-					  fwupd_client_refresh_remote_cb,
-					  helper);
-	g_main_loop_run(helper->loop);
-	if (!helper->ret) {
-		g_propagate_error(error, g_steal_pointer(&helper->error));
-		return FALSE;
-	}
-	return TRUE;
-}
-
 /**
  * fwupd_client_refresh_remote:
  * @self: a #FwupdClient
@@ -2430,8 +2565,12 @@ fwupd_client_refresh_remote(FwupdClient *self,
 			    GCancellable *cancellable,
 			    GError **error)
 {
-	gpointer impl_userdata = NULL;
-	const FwupdClientSyncImpl *impl = fwupd_client_get_sync_impl(self, &impl_userdata);
+	g_autofree gchar *uri_raw = NULL;
+	g_autofree gchar *uri_sig = NULL;
+	g_autoptr(GBytes) bytes_raw = NULL;
+	g_autoptr(GBytes) bytes_sig = NULL;
+	g_autoptr(FwupdInputStream) stream = NULL;
+	g_autoptr(FwupdInputStream) stream_sig = NULL;
 
 	g_return_val_if_fail(FWUPD_IS_CLIENT(self), FALSE);
 	g_return_val_if_fail(FWUPD_IS_REMOTE(remote), FALSE);
@@ -2442,15 +2581,53 @@ fwupd_client_refresh_remote(FwupdClient *self,
 	if (!fwupd_client_connect(self, cancellable, error))
 		return FALSE;
 
-	if (impl->refresh_remote == NULL) {
-		g_set_error_literal(error,
-				    FWUPD_ERROR,
-				    FWUPD_ERROR_NOT_SUPPORTED,
-				    "no FwupdClientSyncImpl->refresh_remote");
+	/* signature */
+	if (fwupd_remote_get_metadata_uri_sig(remote) == NULL) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_NOTHING_TO_DO,
+			    "no metadata signature URI available for %s",
+			    fwupd_remote_get_id(remote));
 		return FALSE;
 	}
-	return impl
-	    ->refresh_remote(self, remote, download_flags, impl_userdata, cancellable, error);
+	uri_sig = fwupd_remote_build_metadata_sig_uri(remote, error);
+	if (uri_sig == NULL)
+		return FALSE;
+	bytes_sig = fwupd_client_download_bytes(self, uri_sig, download_flags, cancellable, error);
+	if (bytes_sig == NULL)
+		return FALSE;
+	if (!fwupd_remote_load_signature_bytes(remote, bytes_sig, error))
+		return FALSE;
+
+	/* payload */
+	if (fwupd_remote_get_metadata_uri(remote) == NULL) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_NOTHING_TO_DO,
+			    "no metadata URI available for %s",
+			    fwupd_remote_get_id(remote));
+		return FALSE;
+	}
+	uri_raw = fwupd_remote_build_metadata_uri(remote, error);
+	if (uri_raw == NULL)
+		return FALSE;
+	bytes_raw = fwupd_client_download_bytes(self, uri_raw, download_flags, cancellable, error);
+	if (bytes_raw == NULL)
+		return FALSE;
+
+	/* load as FwupdUnixInputStream, but fall back to FuMemoryInputStream */
+	stream = fwupd_input_stream_from_bytes(bytes_raw, error);
+	if (stream == NULL)
+		return FALSE;
+	stream_sig = fwupd_input_stream_from_bytes(bytes_sig, error);
+	if (stream_sig == NULL)
+		return FALSE;
+	return fwupd_client_update_metadata_stream(self,
+						   fwupd_remote_get_id(remote),
+						   stream,
+						   stream_sig,
+						   cancellable,
+						   error);
 }
 
 static void
@@ -3128,10 +3305,7 @@ fwupd_client_set_feature_flags(FwupdClient *self,
 	g_return_val_if_fail(cancellable == NULL || G_IS_CANCELLABLE(cancellable), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-	/* connect */
-	if (!fwupd_client_connect(self, cancellable, error))
-		return FALSE;
-
+	/* deliberately do not connect as we can defer this */
 	if (impl->set_feature_flags == NULL) {
 		g_set_error_literal(error,
 				    FWUPD_ERROR,
@@ -3171,6 +3345,8 @@ fwupd_client_self_sign(FwupdClient *self,
 		       GCancellable *cancellable,
 		       GError **error)
 {
+	gpointer impl_userdata = NULL;
+	const FwupdClientSyncImpl *impl = fwupd_client_get_sync_impl(self, &impl_userdata);
 	g_autoptr(FwupdClientHelper) helper = NULL;
 
 	g_return_val_if_fail(FWUPD_IS_CLIENT(self), NULL);
@@ -3181,6 +3357,8 @@ fwupd_client_self_sign(FwupdClient *self,
 	/* connect */
 	if (!fwupd_client_connect(self, cancellable, error))
 		return NULL;
+	if (impl->self_sign != NULL)
+		return impl->self_sign(self, value, flags, impl_userdata, cancellable, error);
 
 	/* call async version and run loop until complete */
 	helper = fwupd_client_helper_new(self);
@@ -3237,6 +3415,12 @@ fwupd_client_download_bytes(FwupdClient *self,
 	g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 	g_return_val_if_fail(fwupd_client_get_user_agent(self) != NULL, NULL);
 
+	/* connect if not already set */
+	if (fwupd_client_get_daemon_version(self) == NULL) {
+		if (!fwupd_client_connect(self, cancellable, error))
+			return NULL;
+	}
+
 	/* call async version and run loop until complete */
 	helper = fwupd_client_helper_new(self);
 	fwupd_client_download_bytes_async(self,
@@ -3275,7 +3459,7 @@ fwupd_client_download_bytes2_cb(GObject *source, GAsyncResult *res, gpointer use
  *
  * Returns: (transfer full): downloaded data, or %NULL for error
  *
- * Since: 2.1.8
+ * Since: 2.2.1
  **/
 GBytes *
 fwupd_client_download_bytes2(FwupdClient *self,

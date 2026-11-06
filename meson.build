@@ -4,7 +4,7 @@ project(
   'rust',
   version: '2.2.1',
   license: 'LGPL-2.1-or-later',
-  meson_version: '>=1.11.0',
+  meson_version: '>=0.63.0', # limited by RHEL-9
   default_options: ['warning_level=2', 'c_std=c17', 'rust_std=2021'],
 )
 
@@ -111,18 +111,11 @@ warning_flags = [
   '-Wmissing-prototypes',
   '-Wnested-externs',
   '-Wno-cast-function-type',
-  '-Wno-deprecated-declarations',
-  '-Wno-address-of-packed-member', # incompatible with g_autoptr()
   '-Wno-unknown-pragmas',
   '-Wno-missing-field-initializers',
-  '-Wno-strict-aliasing',
-  '-Wno-suggest-attribute=format',
-  '-Wno-typedef-redefinition',
-  '-Wno-unknown-warning-option',
+  '-Wno-missing-noreturn',
   '-Wno-unused-parameter',
   '-Wno-nonnull-compare',
-  '-Wno-analyzer-use-of-uninitialized-value', # incompatible with g_autoptr()
-  '-Wno-analyzer-fd-double-close',
   '-Wold-style-definition',
   '-Woverride-init',
   '-Wpointer-arith',
@@ -143,7 +136,12 @@ warning_flags = [
 ]
 static_analysis = get_option('static_analysis') and host_machine.system() != 'windows'
 if static_analysis
-  warning_flags += ['-fanalyzer', '-Wno-analyzer-null-dereference']
+  warning_flags += [
+    '-fanalyzer',
+    '-Wno-analyzer-fd-double-close',
+    '-Wno-analyzer-null-dereference',
+    '-Wno-analyzer-use-of-uninitialized-value',
+  ]
 endif
 cc = meson.get_compiler('c')
 add_project_arguments(
@@ -191,7 +189,12 @@ add_test_setup(
 # enable full RELRO where possible
 # FIXME: until https://github.com/mesonbuild/meson/issues/1140 is fixed
 global_link_args = []
-test_link_args = ['-Wl,-z,relro', '-Wl,-z,defs', '-Wl,-z,now', '-Wl,-z,ibt,-z,shstk']
+test_link_args = ['-Wl,-z,relro', '-Wl,-z,now', '-Wl,-z,ibt,-z,shstk']
+
+# environ is defined in crt1.o on FreeBSD, which the Rust std references
+if host_machine.system() != 'freebsd'
+  test_link_args += '-Wl,-z,defs'
+endif
 foreach arg : test_link_args
   if cc.has_link_argument(arg)
     global_link_args += arg
@@ -288,16 +291,16 @@ localedir = join_paths(prefix, get_option('localedir'))
 diffcmd = find_program('diff')
 glib = dependency(
   'glib-2.0',
-  version: '>= 2.68.0',
+  version: '>= 2.80.0',
   include_type: 'system',
-) # limited by RHEL-9, which has v2.68.4
+)
 gio = dependency(
   'gio-2.0',
-  version: '>= 2.68.0',
-) # limited by RHEL-9, which has v2.68.4
+  version: '>= 2.80.0',
+)
 giounix = dependency(
   'gio-unix-2.0',
-  version: '>= 2.68.0',
+  version: '>= 2.80.0',
   required: false,
 )
 if giounix.found()
@@ -316,12 +319,7 @@ if build_standalone
     conf.set('HAVE_BLUEZ', '1')
   endif
   host_cpu = host_machine.cpu_family()
-  hsi = get_option('hsi').require(host_machine.system() == 'linux').require(
-    host_cpu in ['x86', 'x86_64']
-  ).allowed()
-  if hsi
-    conf.set('HAVE_HSI', '1')
-  endif
+  conf.set_quoted('HOST_CPU_FAMILY', host_cpu)
   libxmlb = dependency(
     'xmlb',
     version: '>= 0.3.19',
@@ -361,6 +359,8 @@ if build_standalone
       dependencies: libusb,
     )
       conf.set('HAVE_LIBUSB_INIT_CONTEXT', '1')
+    elif build_daemon != 'none'
+      error('libusb_init_context (libusb >= 1.0.27) is needed when building the daemon')
     endif
     if cc.has_header_symbol(
       'libusb.h',
@@ -861,6 +861,21 @@ introspection = get_option('introspection').disable_auto_if(host_machine.system(
   not gobject_introspection_dep.found()
 )
 
+textual_version = run_command(
+  [python3, '-c', 'import importlib.metadata; print(importlib.metadata.version("textual"))'],
+  check: false,
+).stdout().strip()
+tui = get_option('tui').require(
+  build_daemon == 'dbus',
+  error_message: 'TUI support requires the D-Bus daemon',
+).require(
+  introspection.allowed(),
+  error_message: 'TUI support requires GObject Introspection',
+).require(
+  textual_version != '' and textual_version.version_compare('>=0.50'),
+  error_message: 'TUI support requires the Python Textual module >= 0.50',
+)
+
 gidocgen_dep = dependency(
   'gi-docgen',
   version: '>= 2021.1',
@@ -946,8 +961,8 @@ allow_uefi = host_machine.system() in ['linux', 'freebsd'] and host_machine.cpu_
   'loongarch64',
 ]
 
-rustmod = import('rust')
-cargo_ws = rustmod.workspace()
+cargo = find_program('cargo')
+cargo_wrapper = find_program(join_paths('generate-build', 'meson-cargo.py'))
 
 subdir('generate-build')
 subdir('rust')
@@ -1018,6 +1033,7 @@ summary(
     'libblkid': libblkid,
     'libdrm': libdrm,
     'logind': logind,
+    'tui': tui.allowed() ? f'Textual @textual_version@' : false,
     'valgrind': valgrind,
     'polkit': polkit,
     'python3': python3,
@@ -1035,7 +1051,6 @@ if build_daemon != 'none'
     {
       'bluez': bluez.allowed(),
       'libusb': libusb,
-      'hsi': hsi,
       'lvfs_metadata_format': lvfs_metadata_format,
       'passim': passim,
       'crypto': jcat_crypto,

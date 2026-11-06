@@ -7,12 +7,13 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 
-import subprocess
-import tempfile
 import os
 import shutil
+import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
-from qubes_fwupd_common import EXIT_CODES, create_dirs, LooseVersion
+
+from qubes_fwupd_common import EXIT_CODES, LooseVersion, create_dirs
 
 FWUPDTOOL = "/bin/fwupdtool"
 
@@ -26,7 +27,7 @@ class FwupdHeads:
         p = subprocess.Popen(cmd_hwids, stdout=subprocess.PIPE)
         self.dom0_hwids_info = p.communicate()[0].decode()
         if p.returncode != 0:
-            raise Exception("fwupd-qubes: Getting hwids info failed")
+            raise RuntimeError("fwupd-qubes: Getting hwids info failed")
 
     def _gather_firmware_version(self):
         """
@@ -68,7 +69,7 @@ class FwupdHeads:
         p = subprocess.Popen(cmd_metadata, stdout=subprocess.PIPE)
         self.metadata_info = p.communicate()[0].decode()
         if p.returncode != 0:
-            raise Exception("fwupd-qubes: Parsing metadata failed")
+            raise RuntimeError("fwupd-qubes: Parsing metadata failed")
 
     def _parse_heads_updates(self, device):
         """
@@ -90,20 +91,21 @@ class FwupdHeads:
             return EXIT_CODES["NOTHING_TO_DO"]
         for release in heads_metadata_info.find("releases").findall("release"):
             release_ver = release.get("version")
-            if self.heads_version == "heads" or LooseVersion(
-                release_ver
-            ) > LooseVersion(self.heads_version):
-                if not self.heads_update_version or LooseVersion(
-                    release_ver
-                ) > LooseVersion(self.heads_update_version):
-                    self.heads_update_url = release.find("location").text
-                    for sha in release.findall("checksum"):
-                        if (
-                            ".cab" in sha.attrib["filename"]
-                            and sha.attrib["type"] == "sha256"
-                        ):
-                            self.heads_update_sha = sha.text
-                    self.heads_update_version = release_ver
+            if (
+                self.heads_version == "heads"
+                or LooseVersion(release_ver) > LooseVersion(self.heads_version)
+            ) and (
+                not self.heads_update_version
+                or LooseVersion(release_ver) > LooseVersion(self.heads_update_version)
+            ):
+                self.heads_update_url = release.find("location").text
+                for sha in release.findall("checksum"):
+                    if (
+                        ".cab" in sha.attrib["filename"]
+                        and sha.attrib["type"] == "sha256"
+                    ):
+                        self.heads_update_sha = sha.text
+                self.heads_update_version = release_ver
         if self.heads_update_url:
             return EXIT_CODES["SUCCESS"]
         else:
@@ -119,7 +121,7 @@ class FwupdHeads:
         heads_update_path = os.path.join(heads_boot_path, "firmware.rom")
         create_dirs(HEADS_UPDATES_DIR)
         if os.path.exists(heads_update_path):
-            print(f"Heads Update == {self.heads_update_version} " "already downloaded.")
+            print(f"Heads Update == {self.heads_update_version} already downloaded.")
             return EXIT_CODES["NOTHING_TO_DO"]
         else:
             os.mkdir(heads_boot_path)
@@ -128,7 +130,7 @@ class FwupdHeads:
                 p = subprocess.Popen(cmd_extract, stdout=subprocess.PIPE)
                 p.communicate()
                 if p.returncode != 0:
-                    raise Exception(f"gcab: Error while extracting {arch_path}.")
+                    raise RuntimeError(f"gcab: Error while extracting {arch_path}.")
                 update_path = os.path.join(tmpdir, "firmware.rom")
                 shutil.copyfile(update_path, heads_update_path)
             print(

@@ -10,17 +10,32 @@
 //! (de)compressing another input stream on the fly.
 
 use crate::compressor::{Compressor, CompressorFormat, Decompressor};
-use crate::streams::{IsSeekable, ReadSeek, StreamError};
+use crate::streams::{IsSeekable, Stream, StreamError, StreamImpl};
 
 use std::io::{self, Read, Seek, SeekFrom};
-use std::sync::{Arc, Mutex};
+
+/// Returned as an `io::Error` with kind `Other` to signal the stream
+/// is not seekable.
+///
+/// This is equivalent to [`ErrorKind::NotSeekable`](std::io::ErrorKind::NotSeekable),
+/// which requires a newer rust version than we support.
+#[derive(Debug)]
+pub struct NotSeekableError {}
+
+impl std::error::Error for NotSeekableError {}
+
+impl std::fmt::Display for NotSeekableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "stream is not seekable")
+    }
+}
 
 /// An adapter to bridge between our base stream
 /// and the [`Compressor`]/[`Decompressor`]. The latter
 /// requires a `Box<dyn Read>` but we can't permanently
 /// lock the base stream.
 struct StreamReader {
-    inner: Arc<Mutex<dyn ReadSeek + Send>>,
+    inner: Stream<StreamImpl>,
 }
 
 impl Read for StreamReader {
@@ -39,7 +54,7 @@ impl Read for StreamReader {
 /// the fly as data is read.
 pub struct CompressorStream {
     // Held to keep the base stream Arc alive for the lifetime of this stream.
-    _base: Arc<Mutex<dyn ReadSeek + Send>>,
+    _base: Stream<StreamImpl>,
     inner: Box<dyn Read + Send>,
 }
 
@@ -50,10 +65,7 @@ impl CompressorStream {
     ///
     /// Returns [`StreamError::InvalidArgs`] if the compressor cannot be
     /// initialized.
-    pub fn new(
-        base: Arc<Mutex<dyn ReadSeek + Send>>,
-        format: CompressorFormat,
-    ) -> Result<Self, StreamError> {
+    pub fn new(base: Stream<StreamImpl>, format: CompressorFormat) -> Result<Self, StreamError> {
         let reader = StreamReader {
             inner: base.clone(),
         };
@@ -74,10 +86,7 @@ impl Read for CompressorStream {
 
 impl Seek for CompressorStream {
     fn seek(&mut self, _pos: SeekFrom) -> io::Result<u64> {
-        Err(std::io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "CompressorStreams are not seekable",
-        ))
+        Err(std::io::Error::other(NotSeekableError {}))
     }
 }
 
@@ -93,7 +102,7 @@ impl IsSeekable for CompressorStream {
 /// the fly as data is read.
 pub struct DecompressorStream {
     // Held to keep the base stream Arc alive for the lifetime of this stream.
-    _base: Arc<Mutex<dyn ReadSeek + Send>>,
+    _base: Stream<StreamImpl>,
     inner: Box<dyn Read + Send>,
 }
 
@@ -104,10 +113,7 @@ impl DecompressorStream {
     ///
     /// Returns [`StreamError::InvalidArgs`] if the decompressor cannot be
     /// initialized.
-    pub fn new(
-        base: Arc<Mutex<dyn ReadSeek + Send>>,
-        format: CompressorFormat,
-    ) -> Result<Self, StreamError> {
+    pub fn new(base: Stream<StreamImpl>, format: CompressorFormat) -> Result<Self, StreamError> {
         let reader = StreamReader {
             inner: base.clone(),
         };
@@ -128,10 +134,7 @@ impl Read for DecompressorStream {
 
 impl Seek for DecompressorStream {
     fn seek(&mut self, _pos: SeekFrom) -> io::Result<u64> {
-        Err(std::io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "DecompressorStreams are not seekable",
-        ))
+        Err(std::io::Error::other(NotSeekableError {}))
     }
 }
 
@@ -144,10 +147,10 @@ impl IsSeekable for DecompressorStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streams::MemoryInputStream;
+    use crate::streams::{IntoStream, MemoryInputStream};
 
-    fn base_stream(data: Vec<u8>) -> Arc<Mutex<dyn ReadSeek + Send>> {
-        Arc::new(Mutex::new(MemoryInputStream::from_data(data)))
+    fn base_stream(data: Vec<u8>) -> Stream<StreamImpl> {
+        MemoryInputStream::from_data(data).into_stream()
     }
 
     fn compress(data: &[u8], format: CompressorFormat) -> Vec<u8> {
@@ -254,7 +257,7 @@ mod tests {
             }
             compressed.push(buf[0]);
         }
-        assert!(!compressed.is_empty());
+        assert_ne!(compressed, Vec::<u8>::new());
         // Verify the compressed data is valid by decompressing it
         let decompressed = decompress(&compressed, CompressorFormat::Gzip);
         assert_eq!(decompressed, data);

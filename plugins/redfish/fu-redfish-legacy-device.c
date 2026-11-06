@@ -116,7 +116,9 @@ fu_redfish_legacy_device_write_firmware(FuDevice *device,
 		return FALSE;
 
 	/* poll the task for progress */
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	location = fwupd_json_object_get_string(json_obj, "@odata.id", error);
 	if (location == NULL) {
 		g_prefix_error(error,
@@ -124,7 +126,9 @@ fu_redfish_legacy_device_write_firmware(FuDevice *device,
 			       fu_redfish_backend_get_push_uri_path(backend));
 		return FALSE;
 	}
-	return fu_redfish_device_poll_task(FU_REDFISH_DEVICE(self), location, progress, error);
+	if (!fu_redfish_device_poll_task(FU_REDFISH_DEVICE(self), location, progress, error))
+		return FALSE;
+	return fu_redfish_device_verify_target_identity(FU_REDFISH_DEVICE(self), error);
 }
 
 static void

@@ -14,7 +14,10 @@
 use std::io::Read;
 use std::pin::Pin;
 
+pub mod mszip;
 mod zlib;
+
+pub use mszip::{mszip_compress_block, MszipBlock, MszipCompressor, MszipDecompressor};
 
 use zlib::{Deflate, Inflate, ZStream};
 
@@ -52,7 +55,7 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// Compression format, mirrors `FuCompressorFormat` from the C enum.
+/// Compression format, mirrors `FwupdCompressorFormat` from the C enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressorFormat {
     /// Raw deflate (no headers).
@@ -150,7 +153,10 @@ impl Read for Decompressor {
                     return Ok(produced);
                 }
                 Err(e) => {
-                    return Err(std::io::Error::other(e.to_string()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    ));
                 }
             }
         }

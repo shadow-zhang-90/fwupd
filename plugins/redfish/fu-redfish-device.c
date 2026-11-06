@@ -9,12 +9,14 @@
 #include "fu-redfish-backend.h"
 #include "fu-redfish-common.h"
 #include "fu-redfish-device.h"
+#include "fu-redfish-firmware.h"
 
 typedef struct {
 	FuRedfishBackend *backend;
 	FwupdJsonObject *json_obj_member;
 	guint64 milestone;
 	gchar *build;
+	gchar *software_id;
 	guint reset_pre_delay;	/* default of 0ms */
 	guint reset_post_delay; /* default of 0ms */
 } FuRedfishDevicePrivate;
@@ -32,6 +34,7 @@ fu_redfish_device_to_string(FuDevice *device, guint idt, GString *str)
 	FuRedfishDevicePrivate *priv = GET_PRIVATE(self);
 	fwupd_codec_string_append_hex(str, idt, "Milestone", priv->milestone);
 	fwupd_codec_string_append(str, idt, "Build", priv->build);
+	fwupd_codec_string_append(str, idt, "SoftwareId", priv->software_id);
 	fwupd_codec_string_append_int(str, idt, "ResetPretDelay", priv->reset_pre_delay);
 	fwupd_codec_string_append_int(str, idt, "ResetPostDelay", priv->reset_post_delay);
 }
@@ -81,9 +84,11 @@ fu_redfish_device_probe_related_pcie_item(FuRedfishDevice *self, const gchar *ur
 					    FU_REDFISH_REQUEST_PERFORM_FLAG_USE_CACHE,
 					error))
 		return FALSE;
-	json_obj = fu_redfish_request_get_json_object(request);
 
 	/* optional properties */
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	tmp = fwupd_json_object_get_string(json_obj, "DeviceClass", NULL);
 	if (tmp != NULL && tmp[0] != '\0')
 		fu_redfish_device_set_device_class(self, tmp);
@@ -157,7 +162,9 @@ fu_redfish_device_probe_related_pcie_functions(FuRedfishDevice *self,
 					    FU_REDFISH_REQUEST_PERFORM_FLAG_USE_CACHE,
 					error))
 		return FALSE;
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	members_array = fwupd_json_object_get_array(json_obj, "Members", NULL);
 	if (members_array != NULL) {
 		for (guint i = 0; i < fwupd_json_array_get_size(members_array); i++) {
@@ -195,9 +202,11 @@ fu_redfish_device_probe_related_item(FuRedfishDevice *self, const gchar *uri, GE
 					    FU_REDFISH_REQUEST_PERFORM_FLAG_USE_CACHE,
 					error))
 		return FALSE;
-	json_obj = fu_redfish_request_get_json_object(request);
 
 	/* optional properties */
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	tmp = fwupd_json_object_get_string(json_obj, "SerialNumber", NULL);
 	if (tmp != NULL && tmp[0] != '\0' && g_strcmp0(tmp, "N/A") != 0)
 		fu_device_set_serial(FU_DEVICE(self), tmp);
@@ -381,17 +390,38 @@ static gboolean
 fu_redfish_device_probe_oem_hpe(FuRedfishDevice *self, FwupdJsonObject *json_obj, GError **error)
 {
 	const gchar *tmp;
+	g_autofree gchar *device_class = NULL;
 	g_autoptr(FwupdJsonArray) json_arr = NULL;
 
 	tmp = fwupd_json_object_get_string(json_obj, "DeviceClass", NULL);
-	if (tmp != NULL)
+	if (tmp != NULL) {
 		fu_device_add_instance_id(FU_DEVICE(self), tmp);
+		device_class = g_ascii_strdown(tmp, -1);
+	}
 	json_arr = fwupd_json_object_get_array(json_obj, "Targets", NULL);
 	if (json_arr != NULL) {
 		for (guint i = 0; i < fwupd_json_array_get_size(json_arr); i++) {
 			tmp = fwupd_json_array_get_string(json_arr, i, NULL);
-			if (tmp != NULL)
-				fu_device_add_instance_id(FU_DEVICE(self), tmp);
+			if (tmp == NULL)
+				continue;
+			fu_device_add_instance_id(FU_DEVICE(self), tmp);
+
+			/* neither is unique on its own: the target is shared with other devices
+			 * of the board and the class with other platforms, so also add the pair */
+			if (device_class != NULL) {
+				g_autofree gchar *target = g_ascii_strdown(tmp, -1);
+				fu_device_add_instance_str(FU_DEVICE(self), "VENDOR", "HPE");
+				fu_device_add_instance_str(FU_DEVICE(self), "CLASS", device_class);
+				fu_device_add_instance_str(FU_DEVICE(self), "TARGET", target);
+				if (!fu_device_build_instance_id(FU_DEVICE(self),
+								 error,
+								 "REDFISH",
+								 "VENDOR",
+								 "CLASS",
+								 "TARGET",
+								 NULL))
+					return FALSE;
+			}
 		}
 	}
 	return TRUE;
@@ -455,6 +485,34 @@ fu_redfish_device_probe_oem_dell(FuRedfishDevice *self, FwupdJsonObject *json_ob
 					   NULL);
 }
 
+static void
+fu_redfish_device_set_software_id(FuRedfishDevice *self, const gchar *software_id)
+{
+	FuRedfishDevicePrivate *priv = GET_PRIVATE(self);
+	g_autofree gchar *software_id_lower = g_ascii_strdown(software_id, -1);
+
+	/* save this as-provided */
+	g_set_str(&priv->software_id, software_id);
+
+	/* already a GUID */
+	if (fwupd_guid_is_valid(software_id_lower)) {
+		fu_device_add_instance_id(FU_DEVICE(self), software_id_lower);
+		return;
+	}
+
+	/* for Lenovo */
+	fu_device_add_instance_str(FU_DEVICE(self), "SOFTWAREID", software_id);
+	if (fu_device_has_private_flag(FU_DEVICE(self), FU_REDFISH_DEVICE_FLAG_UNSIGNED_BUILD))
+		fu_device_add_instance_str(FU_DEVICE(self), "TYPE", "UNSIGNED");
+	fu_device_build_instance_id(FU_DEVICE(self),
+				    NULL,
+				    "REDFISH",
+				    "VENDOR",
+				    "SOFTWAREID",
+				    "TYPE",
+				    NULL);
+}
+
 static gboolean
 fu_redfish_device_probe(FuDevice *dev, GError **error)
 {
@@ -512,23 +570,8 @@ fu_redfish_device_probe(FuDevice *dev, GError **error)
 
 	/* some vendors use a GUID, others use an ID like BMC-AFBT-10 */
 	software_id = fwupd_json_object_get_string(priv->json_obj_member, "SoftwareId", NULL);
-	if (software_id != NULL) {
-		g_autofree gchar *software_id_lower = g_ascii_strdown(software_id, -1);
-		if (fwupd_guid_is_valid(software_id_lower)) {
-			fu_device_add_instance_id(dev, software_id_lower);
-		} else {
-			fu_device_add_instance_str(dev, "SOFTWAREID", software_id);
-			if (fu_device_has_private_flag(dev, FU_REDFISH_DEVICE_FLAG_UNSIGNED_BUILD))
-				fu_device_add_instance_str(dev, "TYPE", "UNSIGNED");
-			fu_device_build_instance_id(dev,
-						    NULL,
-						    "REDFISH",
-						    "VENDOR",
-						    "SOFTWAREID",
-						    "TYPE",
-						    NULL);
-		}
-	}
+	if (software_id != NULL)
+		fu_redfish_device_set_software_id(self, software_id);
 
 	/* get vendor-specific properties too */
 	json_oem = fwupd_json_object_get_object(priv->json_obj_member, "Oem", NULL);
@@ -630,6 +673,82 @@ fu_redfish_device_get_backend(FuRedfishDevice *self, GError **error)
 		return NULL;
 	}
 	return priv->backend;
+}
+
+gboolean
+fu_redfish_device_verify_target_identity(FuRedfishDevice *self, GError **error)
+{
+	FuRedfishDevicePrivate *priv = GET_PRIVATE(self);
+	const gchar *logical_id = fu_device_get_logical_id(FU_DEVICE(self));
+	const gchar *software_id_now;
+	gboolean reset_pending;
+	g_autoptr(FuRedfishRequest) request = NULL;
+	g_autoptr(FwupdJsonObject) json_obj = NULL;
+	g_autoptr(GError) error_local = NULL;
+
+	/* a wildcard update has no single member to re-confirm */
+	if (fu_device_has_private_flag(FU_DEVICE(self), FU_REDFISH_DEVICE_FLAG_WILDCARD_TARGETS))
+		return TRUE;
+
+	/* nothing was captured at probe to compare against */
+	if (logical_id == NULL || priv->software_id == NULL)
+		return TRUE;
+
+	/* while a reset or activation is pending the member is expected to be
+	 * unreachable or stale, so an unavailable readback is tolerated; otherwise
+	 * the task claimed completion and a missing readback is a real problem */
+	reset_pending = fu_device_has_flag(FU_DEVICE(self), FWUPD_DEVICE_FLAG_NEEDS_REBOOT) ||
+			fu_device_has_flag(FU_DEVICE(self), FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION);
+
+	request = fu_redfish_backend_request_new(priv->backend);
+	if (!fu_redfish_request_perform(request,
+					logical_id,
+					FU_REDFISH_REQUEST_PERFORM_FLAG_LOAD_JSON,
+					&error_local)) {
+		if (reset_pending) {
+			g_debug("failed to re-read %s to confirm target identity: %s",
+				logical_id,
+				error_local->message);
+			return TRUE;
+		}
+		g_propagate_prefixed_error(error,
+					   g_steal_pointer(&error_local),
+					   "failed to re-read %s to confirm target identity: ",
+					   logical_id);
+		return FALSE;
+	}
+
+	/* a success with an empty body parses no object, leaving nothing to compare */
+	json_obj = fu_redfish_request_get_json_object(request, &error_local);
+	if (json_obj == NULL) {
+		if (reset_pending) {
+			g_debug("no readback body for %s to confirm target identity", logical_id);
+			return TRUE;
+		}
+		g_propagate_prefixed_error(error,
+					   g_steal_pointer(&error_local),
+					   "failed to re-read %s to confirm target identity: ",
+					   logical_id);
+		return FALSE;
+	}
+
+	/* the SoftwareId was saved as-provided at probe, so compare it as-provided */
+	software_id_now = fwupd_json_object_get_string(json_obj, "SoftwareId", NULL);
+	if (g_strcmp0(software_id_now, priv->software_id) != 0) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_INVALID_FILE,
+			    "Redfish target identity changed: member %s reported SoftwareId %s at "
+			    "discovery "
+			    "but %s on re-read",
+			    logical_id,
+			    priv->software_id,
+			    software_id_now != NULL ? software_id_now : "(none)");
+		return FALSE;
+	}
+
+	/* success */
+	return TRUE;
 }
 
 typedef struct {
@@ -821,7 +940,9 @@ fu_redfish_device_poll_task_once(FuRedfishDevice *self, FuRedfishDevicePollCtx *
 		return FALSE;
 
 	/* percentage is optional */
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	if (!fwupd_json_object_get_integer_with_default(json_obj,
 							"PercentComplete",
 							&pc,
@@ -1030,6 +1151,7 @@ static void
 fu_redfish_device_init(FuRedfishDevice *self)
 {
 	fu_device_set_summary(FU_DEVICE(self), "Redfish device");
+	fu_device_set_firmware_gtype(FU_DEVICE(self), FU_TYPE_REDFISH_FIRMWARE);
 	fu_device_add_protocol(FU_DEVICE(self), "org.dmtf.redfish");
 	fu_device_add_flag(FU_DEVICE(self), FWUPD_DEVICE_FLAG_REQUIRE_AC);
 	fu_device_add_private_flag(FU_DEVICE(self), FU_DEVICE_PRIVATE_FLAG_MD_SET_NAME);
@@ -1049,6 +1171,7 @@ fu_redfish_device_finalize(GObject *object)
 	if (priv->json_obj_member != NULL)
 		fwupd_json_object_unref(priv->json_obj_member);
 	g_free(priv->build);
+	g_free(priv->software_id);
 	G_OBJECT_CLASS(fu_redfish_device_parent_class)->finalize(object);
 }
 

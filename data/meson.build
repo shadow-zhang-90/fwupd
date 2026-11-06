@@ -35,10 +35,10 @@ if build_standalone
   plugin_quirks += files(
     'bios-settings.quirk',
     'cfi.quirk',
+    'context.quirk',
     'ds20.quirk',
     'power.quirk',
     'vendors.quirk',
-    'context.quirk',
   )
 endif
 
@@ -82,6 +82,12 @@ if build_daemon == 'dbus'
         '-/boot/grub',
         '-/efi/EFI',
         '-/sys/firmware/efi/efivars',
+      ]
+    endif
+
+    if get_option('plugin_modem_manager').allowed()
+      rw_directories += [
+        '-/lib/firmware',
       ]
     endif
 
@@ -185,15 +191,6 @@ if build_daemon == 'dbus'
       install_dir: systemd_modules_load_dir,
     )
 
-    # for activation
-    configure_file(
-      input: 'fwupd.shutdown.in',
-      output: 'fwupd.shutdown',
-      configuration: build_conf,
-      install: true,
-      install_tag: 'runtime',
-      install_dir: systemd_shutdown_dir,
-    )
   else
     build_conf.set('systemd_service', '')
   endif

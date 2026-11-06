@@ -26,12 +26,12 @@ _fwupdmgr_cmd_list=(
 	'get-results'
 	'get-topology'
 	'get-updates'
-	'get-upgrades'
 	'get-plugins'
 	'hwids'
 	'inhibit'
 	'uninhibit'
 	'install'
+	'write-blob'
 	'local-install'
 	'modify-config'
 	'modify-remote'
@@ -52,7 +52,6 @@ _fwupdmgr_cmd_list=(
 	'sync'
 	'unlock'
 	'update'
-	'upgrade'
 	'verify'
 	'verify-update'
 	'--version'
@@ -117,6 +116,7 @@ fwupd_modify_config_opts=(
 	'HostBkc'
 	'IdleTimeout'
 	'IgnorePower'
+	'AllowFilenameHintForLocal'
 	'OnlyTrusted'
 	'P2pPolicy'
 	'ReleaseDedupe'
@@ -151,6 +151,7 @@ redfish_modify_config_opts=(
 	'IpmiDisableCreateUser'
 	'ManagerResetTimeout'
 	'Password'
+	'SessionKeyFile'
 	'Uri'
 	'Username'
 	'UserUri'
@@ -236,7 +237,11 @@ _show_device_ids()
 		return 0
 	fi
 	local description
-	description="$(command fwupdmgr get-devices --json 2>/dev/null | jq '.Devices | .[] | .DeviceId')"
+	if [[ -n "$1" ]]; then
+		description="$(command fwupdmgr get-devices --json 2>/dev/null | jq --arg flag "$1" '.Devices | .[] | select(.Flags // [] | index($flag)) | .DeviceId')"
+	else
+		description="$(command fwupdmgr get-devices --json 2>/dev/null | jq '.Devices | .[] | .DeviceId')"
+	fi
 	COMPREPLY+=( $(compgen -W "${description}" -- "$cur") )
 }
 
@@ -318,7 +323,7 @@ _fwupdmgr()
 	esac
 
 	case $arg in
-	activate|check-reboot-needed|clear-results|downgrade|get-releases|get-results|unlock|verify|verify-update|get-updates|switch-branch|update|upgrade|report-export)
+	activate|check-reboot-needed|clear-results|downgrade|get-releases|get-results|unlock|verify|verify-update|get-updates|switch-branch|update|report-export)
 		#device ID
 		if [[ "$args" = "2" ]]; then
 			_show_device_ids
@@ -370,6 +375,15 @@ _fwupdmgr()
 		#version
 		elif [[ "$args" = "3" ]]; then
 			_show_release_versions "$prev"
+		fi
+		;;
+	write-blob)
+		#find files
+		if [[ "$args" = "2" ]]; then
+			_filedir
+		#device ID
+		elif [[ "$args" = "3" ]]; then
+			_show_device_ids is-programmer-target
 		fi
 		;;
 	local-install)
@@ -439,7 +453,7 @@ _fwupdmgr()
 			return 0
 		elif [[ "$args" = "4" ]]; then
 			case $prev in
-			EnumerateAllDevices|OnlyTrusted|IgnorePower|UpdateMotd|ShowDevicePrivate|ReleaseDedupe|TestDevices)
+			EnumerateAllDevices|OnlyTrusted|IgnorePower|AllowFilenameHintForLocal|UpdateMotd|ShowDevicePrivate|ReleaseDedupe|TestDevices)
 				COMPREPLY=( $(compgen -W "True False" -- "$cur") )
 				;;
 			AnotherWriteRequired|NeedsActivation|NeedsReboot|RegistrationSupported|RequestSupported|WriteSupported)

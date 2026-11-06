@@ -41,6 +41,7 @@ shared_module(
     'fu-mm-firehose-device.c',
     'fu-mm-mbim-device.c',
     'fu-mm-mhi-qcdm-device.c',
+    'fu-mm-mhi-firehose-device.c',
     'fu-mm-plugin.c',
     'fu-mm-qcdm-device.c',
     'fu-mm-qdu-mbim-device.c',
@@ -61,8 +62,8 @@ shared_module(
 )
 
 device_tests += files(
-  'tests/lenovo-em061kgl-mbim.json',
   'tests/foxconn-t99w373-mbim.json',
+  'tests/lenovo-em061kgl-mbim.json',
   'tests/qc-eg25ggc-fastboot.json',
   'tests/qc-rw101r-fastboot.json',
 )
@@ -70,6 +71,7 @@ enumeration_data += files(
   'tests/foxconn-t99w373-mbim-setup.json',
   'tests/qc-eg25ggc-fastboot-setup.json',
   'tests/qc-rw101r-fastboot-setup.json',
+  'tests/qc-rw135r-firehose-setup.json',
 )
 
 if get_option('tests')

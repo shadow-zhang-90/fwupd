@@ -32,6 +32,8 @@ fu_gpio_device_to_string(FuDevice *device, guint idt, GString *str)
 static gboolean
 fu_gpio_device_probe(FuDevice *device, GError **error)
 {
+	FuGpioDevice *self = FU_GPIO_DEVICE(device);
+
 	/* no device file */
 	if (fu_udev_device_get_device_file(FU_UDEV_DEVICE(device)) == NULL) {
 		g_set_error_literal(error,
@@ -40,6 +42,9 @@ fu_gpio_device_probe(FuDevice *device, GError **error)
 				    "no device file");
 		return FALSE;
 	}
+
+	/* although this isn't strictly true, there's no point showing this in the UI */
+	fu_device_remove_flag(FU_DEVICE(self), FWUPD_DEVICE_FLAG_CAN_EMULATION_TAG);
 
 	/* set the physical ID */
 	return fu_udev_device_set_physical_id(FU_UDEV_DEVICE(device), "gpio", error);
@@ -108,7 +113,7 @@ fu_gpio_device_assign_full(FuGpioDevice *self, guint64 line, gboolean value, GEr
 	const gchar consumer[] = "fwupd";
 	struct gpio_v2_line_request req = {
 	    .num_lines = 1,
-	    req.offsets[0] = line,
+	    .offsets[0] = line,
 	    .config.flags = GPIO_V2_LINE_FLAG_OUTPUT,
 	    .config.num_attrs = 1,
 	    .config.attrs[0].attr.values = value ? 0x1 : 0x0,

@@ -65,6 +65,9 @@ typedef struct {
 	gboolean done_connect;
 	gboolean done_set_feature_flags;
 	FwupdFeatureFlags feature_flags;
+	gchar *install_device_id;
+	gchar *install_filename;
+	gchar *install_version;
 } FwupdClientImplHelper;
 
 static gboolean
@@ -91,6 +94,23 @@ fwupd_client_impl_set_feature_flags_cb(FwupdClient *self,
 	return TRUE;
 }
 
+static gboolean
+fwupd_client_impl_write_blob_cb(FwupdClient *self,
+				const gchar *device_id,
+				FwupdInputStream *stream,
+				const gchar *filename_hint,
+				const gchar *version,
+				gpointer user_data,
+				GCancellable *cancellable,
+				GError **error)
+{
+	FwupdClientImplHelper *helper = (FwupdClientImplHelper *)user_data;
+	helper->install_device_id = g_strdup(device_id);
+	helper->install_filename = g_strdup(filename_hint);
+	helper->install_version = g_strdup(version);
+	return TRUE;
+}
+
 static void
 fwupd_client_sync_impl_func(void)
 {
@@ -100,6 +120,7 @@ fwupd_client_sync_impl_func(void)
 	FwupdClientSyncImpl impl = {
 	    .connect = fwupd_client_impl_connect_cb,
 	    .set_feature_flags = fwupd_client_impl_set_feature_flags_cb,
+	    .write_blob = fwupd_client_impl_write_blob_cb,
 	};
 	FwupdClientImplHelper helper = {};
 
@@ -117,6 +138,16 @@ fwupd_client_sync_impl_func(void)
 	g_assert_cmpint(helper.feature_flags, ==, FWUPD_FEATURE_FLAG_SHOW_PROBLEMS);
 	g_assert_true(helper.done_connect);
 	g_assert_true(helper.done_set_feature_flags);
+
+	ret = fwupd_client_write_blob(client, "abc", "/etc/os-release", "1.2.3", NULL, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_cmpstr(helper.install_device_id, ==, "abc");
+	g_assert_cmpstr(helper.install_filename, ==, "/etc/os-release");
+	g_assert_cmpstr(helper.install_version, ==, "1.2.3");
+	g_free(helper.install_device_id);
+	g_free(helper.install_filename);
+	g_free(helper.install_version);
 
 	ret = fwupd_client_reset_config(client, "daemon", NULL, &error);
 	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
@@ -139,7 +170,8 @@ fwupd_client_download_func(void)
 		return;
 	}
 
-	fwupd_client_set_user_agent_for_package(client, PACKAGE_NAME, PACKAGE_VERSION);
+	fwupd_client_set_user_agent_for_package(client, g_get_prgname(), PACKAGE_VERSION);
+	fwupd_client_set_daemon_version(client, PACKAGE_VERSION);
 	uri = g_strdup_printf("file://%s", fn);
 	blob1 =
 	    fwupd_client_download_bytes(client, uri, FWUPD_CLIENT_DOWNLOAD_FLAG_NONE, NULL, &error);
@@ -203,7 +235,13 @@ static void
 fwupd_client_api_ro_props(void)
 {
 #if GLIB_CHECK_VERSION(2, 74, 0)
-	const gchar *props[] = {"daemon-version", "tainted", "interactive", "only-trusted", NULL};
+	const gchar *props[] = {
+	    "daemon-version",
+	    "tainted",
+	    "pending-reboot",
+	    "interactive",
+	    "only-trusted",
+	};
 
 	for (guint i = 0; i < G_N_ELEMENTS(props); i++) {
 		if (g_test_subprocess()) {
@@ -248,6 +286,10 @@ fwupd_client_api(void)
 	g_assert_false(ret);
 	ret = fwupd_client_get_tainted(client);
 	g_assert_false(ret);
+	ret = fwupd_client_get_pending_reboot(client);
+	g_assert_false(ret);
+	fwupd_client_set_pending_reboot(client, TRUE);
+	g_assert_true(fwupd_client_get_pending_reboot(client));
 
 	/* set the version multiple times */
 	fwupd_client_set_daemon_version(client, "1.2.3");
@@ -303,11 +345,23 @@ fwupd_client_api(void)
 	g_assert_cmpint(fwupd_client_get_battery_level(client), ==, 50);
 	g_object_set_property(G_OBJECT(client), "battery-level", &value_int);
 
+	/* set battery level using the setter directly */
+	fwupd_client_set_battery_level(client, 75);
+	g_assert_cmpint(fwupd_client_get_battery_level(client), ==, 75);
+	fwupd_client_set_battery_level(client, 75);
+	g_assert_cmpint(fwupd_client_get_battery_level(client), ==, 75);
+
 	/* set same battery threshold multiple times */
 	g_value_set_int(&value_int, 20);
 	g_object_set_property(G_OBJECT(client), "battery-threshold", &value_int);
 	g_assert_cmpint(fwupd_client_get_battery_threshold(client), ==, 20);
 	g_object_set_property(G_OBJECT(client), "battery-threshold", &value_int);
+
+	/* set battery threshold using the setter directly */
+	fwupd_client_set_battery_threshold(client, 10);
+	g_assert_cmpint(fwupd_client_get_battery_threshold(client), ==, 10);
+	fwupd_client_set_battery_threshold(client, 10);
+	g_assert_cmpint(fwupd_client_get_battery_threshold(client), ==, 10);
 
 	/* set same status multiple times */
 	g_value_set_int(&value_int, FWUPD_STATUS_IDLE);

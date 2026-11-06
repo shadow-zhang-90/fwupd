@@ -7,19 +7,18 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 
-import json
-import unittest
-import os
-import subprocess
-import sys
 import importlib.util
 import io
+import json
+import os
 import platform
+import subprocess
+import sys
 import tempfile
-from .fwupd_logs import UPDATE_INFO, GET_DEVICES, DMI_DECODE
-from .fwupd_logs import GET_DEVICES_NO_VERSION
+import unittest
 from unittest.mock import patch
 
+from .fwupd_logs import DMI_DECODE, GET_DEVICES, GET_DEVICES_NO_VERSION, UPDATE_INFO
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 QUBES_FWUPDMGR_REPO = os.path.join(_THIS_DIR, "..", "src", "qubes_fwupdmgr.py")
@@ -45,7 +44,9 @@ FWUPD_DOM0_METADATA_DIR = os.path.join(FWUPD_DOM0_DIR, "metadata")
 FWUPD_DOM0_METADATA_FILE = os.path.join(FWUPD_DOM0_METADATA_DIR, "firmware.xml.xz")
 FWUPD_DOM0_METADATA_FILE_JCAT = os.path.join(FWUPD_DOM0_METADATA_DIR, "firmware.xml.xz")
 REQUIRED_DEV = "Requires device not connected"
-XL_LIST_LOG = "Name                                        ID   Mem VCPUs	State	Time(s)"
+XL_LIST_LOG = (
+    "Name                                        ID   Mem VCPUs	State	Time(s)"
+)
 FWUPDMGR = "/bin/fwupdmgr"
 BIOS_UPDATE_FLAG = os.path.join(FWUPD_DOM0_DIR, "bios_update")
 LVFS_TESTING_DOM0_FLAG = os.path.join(FWUPD_DOM0_DIR, "lvfs_testing")

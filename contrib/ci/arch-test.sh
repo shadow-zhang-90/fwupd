@@ -48,7 +48,9 @@ ninja -C qt5-thread-test test
 endgroup
 
 group "Get the test firmware"
-./contrib/ci/get_test_firmware.sh /usr/share/installed-tests/fwupd/
+if [ "${CI_NETWORK:-false}" = "true" ]; then
+    ./fwupbuild download-test-firmware --tests installed-tests --dest /usr/share/installed-tests/fwupd/
+fi
 endgroup
 
 group "Set up PolicyKit and D-Bus to run the daemon"
@@ -85,5 +87,8 @@ group "Run fwupdtool-efiboot.sh installed test"
 /usr/share/installed-tests/fwupd/fwupdtool-efiboot.sh
 endgroup
 
-# generate coverage report
-./contrib/ci/coverage.sh
+# run gcovr from the build directory
+WORKSPACE="$PWD"
+(cd build/src/fwupd &&
+    GCOVR_SEARCH=../build GCOVR_OUTPUT="$WORKSPACE/coverage.xml" \
+        "$WORKSPACE/contrib/ci/coverage.py")

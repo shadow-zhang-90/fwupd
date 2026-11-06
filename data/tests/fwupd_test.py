@@ -13,11 +13,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import dbusmock
 
+import dbusmock
 import gi
-from gi.repository import GLib
-from gi.repository import Gio
+from gi.repository import Gio, GLib
 
 gi.require_version("UMockdev", "1.0")
 from gi.repository import UMockdev
@@ -122,9 +121,7 @@ class FwupdTest(dbusmock.DBusTestCase):
         # note: Python doesn't propagate the setenv from Testbed.new(), so we
         # have to do that ourselves
         env["UMOCKDEV_DIR"] = self.testbed.get_root_dir()
-        self.daemon_log = (
-            tempfile.NamedTemporaryFile()
-        )  # pylint: disable=consider-using-with
+        self.daemon_log = tempfile.NamedTemporaryFile()  # noqa: SIM115  # pylint: disable=consider-using-with
         daemon_path = [self.daemon_path, "-vv"]
 
         # pylint: disable=consider-using-with
@@ -238,7 +235,7 @@ class FwupdTest(dbusmock.DBusTestCase):
     def start_upower(self, on_battery):
         """Start the upower service with the given on_battery state"""
 
-        sys_bat = self.testbed.add_device(
+        self.testbed.add_device(
             "power_supply",
             "fakeBAT0",
             None,
@@ -261,7 +258,7 @@ class FwupdTest(dbusmock.DBusTestCase):
             ["POWER_SUPPLY_ONLINE", "1"],
         )
 
-        self.upowerd, obj_upower = self.spawn_server_template(
+        self.upowerd, _obj_upower = self.spawn_server_template(
             "upower",
             {"DaemonVersion": "0.99", "OnBattery": on_battery},
             stdout=subprocess.PIPE,
@@ -292,6 +289,7 @@ class VeryBasicTest(FwupdTest):
         self.assertEqual(self.get_dbus_property("Interactive"), False)
         self.assertEqual(self.get_dbus_property("OnlyTrusted"), True)
         self.assertEqual(self.get_dbus_property("Tainted"), False)
+        self.assertEqual(self.get_dbus_property("PendingReboot"), False)
         self.assertEqual(self.get_dbus_property("HostBkc"), "")
         self.assertEqual(self.get_dbus_property("HostProduct"), "Unknown Product")
         self.assertEqual(self.get_dbus_property("HostVendor"), "Unknown Vendor")

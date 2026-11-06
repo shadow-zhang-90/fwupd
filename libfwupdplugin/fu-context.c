@@ -12,7 +12,6 @@
 #include <cpuid.h>
 #endif
 
-#include "fu-bios-settings-private.h"
 #include "fu-common-private.h"
 #include "fu-config-private.h"
 #include "fu-context-helper.h"
@@ -26,6 +25,7 @@
 #include "fu-path-store.h"
 #include "fu-path.h"
 #include "fu-pefile-firmware.h"
+#include "fu-string.h"
 #include "fu-volume-locker.h"
 #include "fu-volume-private.h"
 
@@ -47,6 +47,7 @@ typedef struct {
 	FuQuirks *quirks;
 	FuEfivars *efivars;
 	GPtrArray *backends;
+	GPtrArray *host_bkcs; /* utf8 */
 	GHashTable *runtime_versions;
 	GHashTable *compile_versions;
 	GHashTable *udev_subsystems; /* utf8:GPtrArray */
@@ -58,7 +59,7 @@ typedef struct {
 	FuDisplayState display_state;
 	guint battery_level;
 	guint battery_threshold;
-	FuBiosSettings *host_bios_settings;
+	GPtrArray *bios_settings;
 	FuFirmware *fdt; /* optional */
 	gchar *esp_location;
 	FuCpuVendor cpu_vendor;
@@ -87,6 +88,8 @@ static guint signals[SIGNAL_LAST] = {0};
 G_DEFINE_TYPE_WITH_PRIVATE(FuContext, fu_context, G_TYPE_OBJECT)
 
 #define GET_PRIVATE(o) (fu_context_get_instance_private(o))
+
+#define FU_CONTEXT_HOST_BKCS_MAX 100
 
 static gboolean
 fu_context_ensure_smbios_uefi_enabled(FuContext *self, GError **error)
@@ -612,38 +615,21 @@ fu_context_get_smbios_integer(FuContext *self,
 }
 
 /**
- * fu_context_reload_bios_settings:
- * @self: a #FuContext
- * @error: (nullable): optional return location for an error
- *
- * Refreshes the list of firmware attributes on the system.
- *
- * Since: 1.8.4
- **/
-gboolean
-fu_context_reload_bios_settings(FuContext *self, GError **error)
-{
-	FuContextPrivate *priv = GET_PRIVATE(self);
-	g_return_val_if_fail(FU_IS_CONTEXT(self), FALSE);
-	return fu_bios_settings_setup(priv->host_bios_settings, error);
-}
-
-/**
  * fu_context_get_bios_settings:
  * @self: a #FuContext
  *
  * Returns all the firmware attributes defined in the system.
  *
- * Returns: (transfer full): A #FuBiosSettings
+ * Returns: (transfer full) (element-type FuBiosSetting): an array
  *
- * Since: 1.8.4
+ * Since: 2.1.8
  **/
-FuBiosSettings *
+GPtrArray *
 fu_context_get_bios_settings(FuContext *self)
 {
 	FuContextPrivate *priv = GET_PRIVATE(self);
 	g_return_val_if_fail(FU_IS_CONTEXT(self), NULL);
-	return g_object_ref(priv->host_bios_settings);
+	return g_ptr_array_ref(priv->bios_settings);
 }
 
 /**
@@ -653,37 +639,68 @@ fu_context_get_bios_settings(FuContext *self)
  *
  * Finds out if a system supports a given BIOS setting.
  *
- * Returns: (transfer none): #FwupdBiosSetting if the attr exists.
+ * Returns: (transfer none): #FuBiosSetting if the attr exists.
  *
  * Since: 1.8.4
  **/
-FwupdBiosSetting *
+FuBiosSetting *
 fu_context_get_bios_setting(FuContext *self, const gchar *name)
 {
 	FuContextPrivate *priv = GET_PRIVATE(self);
 	g_return_val_if_fail(FU_IS_CONTEXT(self), NULL);
 	g_return_val_if_fail(name != NULL, NULL);
-	return fu_bios_settings_get_attr(priv->host_bios_settings, name);
+
+	for (guint i = 0; i < priv->bios_settings->len; i++) {
+		FuBiosSetting *attr = g_ptr_array_index(priv->bios_settings, i);
+		if (g_strcmp0(name, fu_bios_setting_get_id(attr)) == 0 ||
+		    g_strcmp0(name, fu_bios_setting_get_name(attr)) == 0 ||
+		    g_strcmp0(name, fu_bios_setting_get_appstream_id(attr)) == 0)
+			return attr;
+	}
+	return NULL;
 }
 
 /**
- * fu_context_get_bios_setting_pending_reboot:
+ * fu_context_add_bios_setting:
  * @self: a #FuContext
+ * @attr: a #FuBiosSetting
+ * @error: (nullable): optional return location for an error
  *
- * Determine if updates to BIOS settings are pending until next boot.
+ * Registers a BIOS setting that was created by a plugin.
+ * This is a public API for plugins to register custom BIOS settings.
  *
- * Returns: %TRUE if updates are pending.
+ * Returns: TRUE if the setting was registered successfully
  *
- * Since: 1.8.4
+ * Since: 2.1.8
  **/
 gboolean
-fu_context_get_bios_setting_pending_reboot(FuContext *self)
+fu_context_add_bios_setting(FuContext *self, FuBiosSetting *attr, GError **error)
 {
 	FuContextPrivate *priv = GET_PRIVATE(self);
-	gboolean ret;
+
 	g_return_val_if_fail(FU_IS_CONTEXT(self), FALSE);
-	fu_bios_settings_get_pending_reboot(priv->host_bios_settings, &ret, NULL);
-	return ret;
+	g_return_val_if_fail(FU_IS_BIOS_SETTING(attr), FALSE);
+	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+	if (fu_bios_setting_get_id(attr) == NULL) {
+		g_set_error_literal(error,
+				    FWUPD_ERROR,
+				    FWUPD_ERROR_INVALID_DATA,
+				    "BIOS setting missing required id property");
+		return FALSE;
+	}
+
+	if (fu_context_get_bios_setting(self, fu_bios_setting_get_id(attr)) != NULL) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_INVALID_DATA,
+			    "BIOS setting with id %s already exists",
+			    fu_bios_setting_get_id(attr));
+		return FALSE;
+	}
+
+	g_ptr_array_add(priv->bios_settings, g_object_ref(attr));
+	return TRUE;
 }
 
 /**
@@ -1552,6 +1569,143 @@ fu_context_load_boot_entries(FuContext *self, GError **error)
 }
 
 /**
+ * fu_context_get_host_bkcs:
+ * @self: a #FuContext
+ *
+ * Gets the list of host BKCs.
+ *
+ * Returns: (transfer none) (element-type utf8): a #GPtrArray
+ *
+ * Since: 2.1.8
+ **/
+GPtrArray *
+fu_context_get_host_bkcs(FuContext *self)
+{
+	FuContextPrivate *priv = GET_PRIVATE(self);
+	g_return_val_if_fail(FU_IS_CONTEXT(self), NULL);
+	return priv->host_bkcs;
+}
+
+/**
+ * fu_context_get_host_bkcs_as_str:
+ * @self: a #FuContext
+ *
+ * Gets the list of host BKCs.
+ *
+ * Returns: a string representing the host BKCs.
+ *
+ * Since: 2.1.8
+ **/
+gchar *
+fu_context_get_host_bkcs_as_str(FuContext *self)
+{
+	FuContextPrivate *priv = GET_PRIVATE(self);
+
+	g_autoptr(GString) str = NULL;
+	g_return_val_if_fail(FU_IS_CONTEXT(self), NULL);
+
+	if (priv->host_bkcs->len == 0)
+		return NULL;
+	return fu_strjoin(",", priv->host_bkcs);
+}
+
+/**
+ * fu_context_add_host_bkc:
+ * @self: a #FuContext
+ * @host_bkc: a host BKC, e.g. `uefi-secure-boot`
+ *
+ * Adds a host BKC if it does not already exist.
+ *
+ * Since: 2.1.8
+ **/
+void
+fu_context_add_host_bkc(FuContext *self, const gchar *host_bkc)
+{
+	FuContextPrivate *priv = GET_PRIVATE(self);
+
+	g_return_if_fail(FU_IS_CONTEXT(self));
+	g_return_if_fail(host_bkc != NULL);
+
+	if (g_strcmp0(host_bkc, "") == 0)
+		return;
+	if (g_ptr_array_find_with_equal_func(priv->host_bkcs, host_bkc, g_str_equal, NULL))
+		return;
+	g_ptr_array_add(priv->host_bkcs, g_strdup(host_bkc));
+}
+
+static gboolean
+fu_context_add_host_bkc_safe(FuContext *self, const gchar *host_bkc, GError **error)
+{
+	g_auto(GStrv) host_bkcs = NULL;
+
+	host_bkcs = g_strsplit(host_bkc, ",", FU_CONTEXT_HOST_BKCS_MAX);
+	if (g_strv_length(host_bkcs) == FU_CONTEXT_HOST_BKCS_MAX) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_INVALID_DATA,
+			    "host has unreasonable BKC count: %u",
+			    (guint)FU_CONTEXT_HOST_BKCS_MAX);
+		return FALSE;
+	}
+	for (guint i = 0; host_bkcs[i] != NULL; i++)
+		fu_context_add_host_bkc(self, host_bkcs[i]);
+
+	/* success */
+	return TRUE;
+}
+
+static void
+fu_context_host_bkc_quirk_cb(FuContext *self,
+			     const gchar *key,
+			     const gchar *value,
+			     FuContextQuirkSource source,
+			     gpointer user_data)
+{
+	g_auto(GStrv) host_bkcs = NULL;
+
+	if (value == NULL)
+		return;
+	host_bkcs = g_strsplit(value, ",", -1);
+	for (guint i = 0; host_bkcs[i] != NULL; i++)
+		fu_context_add_host_bkc(self, host_bkcs[i]);
+}
+
+static gboolean
+fu_context_load_host_bkcs(FuContext *self, GError **error)
+{
+	FuContextPrivate *priv = GET_PRIVATE(self);
+	GPtrArray *guids = fu_context_get_hwid_guids(self);
+	g_autofree gchar *host_bkc = NULL;
+
+	/* unload all previous entries */
+	g_ptr_array_set_size(priv->host_bkcs, 0);
+
+	/* add from config then quirk files */
+	host_bkc = fu_context_get_config_str(self, "HostBkc");
+	if (host_bkc != NULL) {
+		if (!fu_context_add_host_bkc_safe(self, host_bkc, error))
+			return FALSE;
+	}
+	for (guint i = 0; i < guids->len; i++) {
+		const gchar *guid = g_ptr_array_index(guids, i);
+		fu_context_lookup_quirk_by_id_iter(self,
+						   guid,
+						   FU_QUIRKS_HOST_BKC,
+						   fu_context_host_bkc_quirk_cb,
+						   NULL);
+	}
+
+	/* success */
+	return TRUE;
+}
+
+static void
+fu_context_config_changed_cb(FuConfig *config, FuContext *self)
+{
+	fu_context_load_host_bkcs(self, NULL);
+}
+
+/**
  * fu_context_load:
  * @self: a #FuContext
  * @progress: a #FuProgress
@@ -1599,7 +1753,6 @@ fu_context_load(FuContext *self, FuProgress *progress, FuContextLoadFlags flags,
 	fu_progress_add_step(progress, FWUPD_STATUS_LOADING, 3, "set-flags");
 	fu_progress_add_step(progress, FWUPD_STATUS_LOADING, 1, "detect-fde");
 	fu_progress_add_step(progress, FWUPD_STATUS_LOADING, 1, "detect-hypervisor-container");
-	fu_progress_add_step(progress, FWUPD_STATUS_LOADING, 93, "reload-bios-settings");
 
 	/* load paths */
 	if (flags & FU_CONTEXT_LOAD_FLAG_PATH_STORE_DEFAULTS)
@@ -1621,6 +1774,7 @@ fu_context_load(FuContext *self, FuProgress *progress, FuContextLoadFlags flags,
 		config_load_flags |= FU_CONFIG_LOAD_FLAG_FIX_PERMISSIONS;
 	if (!fu_config_load(priv->config, config_load_flags, error))
 		return FALSE;
+	g_signal_connect(priv->config, "changed", G_CALLBACK(fu_context_config_changed_cb), self);
 
 	/* run all the HWID setup funcs */
 	for (guint i = 0; hwids_setup_map[i].name != NULL; i++) {
@@ -1644,6 +1798,10 @@ fu_context_load(FuContext *self, FuProgress *progress, FuContextLoadFlags flags,
 	/* does the system support UEFI mode? */
 	if (!fu_context_ensure_smbios_uefi_enabled(self, &error_smbios))
 		g_debug("%s", error_smbios->message);
+
+	/* load per-host BKC from config */
+	if (!fu_context_load_host_bkcs(self, error))
+		return FALSE;
 
 	/* set the hwid flags */
 	guids = fu_context_get_hwid_guids(self);
@@ -1681,11 +1839,6 @@ fu_context_load(FuContext *self, FuProgress *progress, FuContextLoadFlags flags,
 		fu_context_detect_container(self);
 	}
 	fu_context_detect_cpu_vendor(self);
-	fu_progress_step_done(progress);
-
-	fu_context_add_udev_subsystem(self, "firmware-attributes", NULL);
-	if (!fu_context_reload_bios_settings(self, &error_bios_settings))
-		g_debug("%s", error_bios_settings->message);
 	fu_progress_step_done(progress);
 
 	/* is this dual booted with Windows */
@@ -2012,14 +2165,14 @@ fu_context_add_esp_volume(FuContext *self, FuVolume *volume)
 				"write-file",
 				G_CALLBACK(fu_context_esp_write_file_cb),
 				self,
-				0);
+				G_CONNECT_DEFAULT);
 	g_ptr_array_add(priv->esp_volumes, g_object_ref(volume));
 }
 
 /**
  * fu_context_set_esp_location:
  * @self: A #FuContext object.
- * @location: The path to the preferred ESP.
+ * @location: (nullable): The path to the preferred ESP, or %NULL for automatic selection.
  *
  * Sets the user's desired ESP (EFI System Partition) location for the given #FuContext.
  */
@@ -2028,7 +2181,6 @@ fu_context_set_esp_location(FuContext *self, const gchar *location)
 {
 	FuContextPrivate *priv = GET_PRIVATE(self);
 	g_return_if_fail(FU_IS_CONTEXT(self));
-	g_return_if_fail(location != NULL);
 	g_set_str(&priv->esp_location, location);
 }
 
@@ -2946,11 +3098,12 @@ fu_context_finalize(GObject *object)
 	g_hash_table_unref(priv->hwid_flags);
 	g_object_unref(priv->quirks);
 	g_object_unref(priv->smbios);
-	g_object_unref(priv->host_bios_settings);
+	g_ptr_array_unref(priv->bios_settings);
 	g_hash_table_unref(priv->firmware_gtypes);
 	g_hash_table_unref(priv->udev_subsystems);
 	g_ptr_array_unref(priv->esp_volumes);
 	g_ptr_array_unref(priv->backends);
+	g_ptr_array_unref(priv->host_bkcs);
 
 	G_OBJECT_CLASS(fu_context_parent_class)->finalize(object);
 }
@@ -3156,11 +3309,12 @@ fu_context_init(FuContext *self)
 						      (GDestroyNotify)g_ptr_array_unref);
 	priv->firmware_gtypes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	priv->quirks = fu_quirks_new(self);
-	priv->host_bios_settings = fu_bios_settings_new(self);
+	priv->bios_settings = g_ptr_array_new_with_free_func((GDestroyNotify)g_object_unref);
 	priv->esp_volumes = g_ptr_array_new_with_free_func((GDestroyNotify)g_object_unref);
 	priv->runtime_versions = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	priv->compile_versions = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	priv->backends = g_ptr_array_new_with_free_func((GDestroyNotify)g_object_unref);
+	priv->host_bkcs = g_ptr_array_new_with_free_func(g_free);
 }
 
 /* private */

@@ -405,11 +405,22 @@ fu_backend_from_json(FwupdCodec *codec, FwupdJsonObject *json_obj, GError **erro
 		object_tmp = fwupd_json_array_get_object(json_arr, i, error);
 		if (object_tmp == NULL)
 			return FALSE;
+		if (fwupd_json_object_get_size(object_tmp) <= 1) {
+			if (fwupd_version != NULL) {
+				g_debug("ignoring empty emulated device from fwupd %s",
+					fwupd_version);
+			} else {
+				g_debug("ignoring empty emulated device");
+			}
+			continue;
+		}
 
 		/* get the GType */
 		device_gtypestr = fwupd_json_object_get_string(object_tmp, "GType", NULL);
 		if (device_gtypestr == NULL)
 			device_gtypestr = "FuUsbDevice";
+		if (g_strcmp0(device_gtypestr, "FuBluezDevice") == 0)
+			device_gtypestr = "FuBluetoothDevice";
 		device_gtype = g_type_from_name(device_gtypestr);
 		if (device_gtype == G_TYPE_INVALID) {
 			g_set_error(error,

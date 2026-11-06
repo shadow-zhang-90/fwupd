@@ -6,11 +6,11 @@
 #
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
+import argparse
 import os
 import sys
-import argparse
-from jinja2 import Environment, FileSystemLoader
 
+from jinja2 import Environment, FileSystemLoader
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

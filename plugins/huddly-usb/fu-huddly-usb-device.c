@@ -14,6 +14,10 @@
 enum { EP_OUT, EP_IN, EP_LAST };
 #define HUDDLY_USB_RECEIVE_BUFFER_SIZE 1024
 
+/* allow for eMMC stalls before the camera drains the bulk endpoint */
+#define HUDDLY_USB_BULK_WRITE_TIMEOUT 30000 /* ms */
+#define HUDDLY_USB_BULK_READ_TIMEOUT  20000 /* ms */
+
 #if !GLIB_CHECK_VERSION(2, 74, 0)
 #define G_REGEX_DEFAULT	      0
 #define G_REGEX_MATCH_DEFAULT 0
@@ -93,7 +97,7 @@ fu_huddly_usb_device_bulk_write(FuHuddlyUsbDevice *self,
 						 src->data + offset,
 						 chunk_size,
 						 &transmitted,
-						 5000,
+						 HUDDLY_USB_BULK_WRITE_TIMEOUT,
 						 error)) {
 			return FALSE;
 		}
@@ -116,7 +120,7 @@ fu_huddly_usb_device_bulk_read(FuHuddlyUsbDevice *self,
 					   buf->data,
 					   buf->len,
 					   received_length,
-					   20000,
+					   HUDDLY_USB_BULK_READ_TIMEOUT,
 					   error);
 }
 
@@ -310,6 +314,8 @@ fu_huddly_usb_device_hcp_write_file(FuHuddlyUsbDevice *self,
 	g_ptr_array_add(msgpack_items, fu_msgpack_item_new_string("file_data"));
 	g_ptr_array_add(msgpack_items, fu_msgpack_item_new_binary_stream(stream));
 	payload_msgpack = fu_msgpack_write(msgpack_items, error);
+	if (payload_msgpack == NULL)
+		return FALSE;
 	msg_req = fu_huddly_usb_hlink_msg_new("hcp/write", payload_msgpack);
 	buf = fu_huddly_usb_hlink_msg_write(msg_req, error);
 	if (buf == NULL)
@@ -400,7 +406,12 @@ fu_huddly_usb_device_hpk_done_cb(FuDevice *device, gpointer user_data, GError **
 		return FALSE;
 	err = fu_msgpack_item_get_integer(item_error);
 	if (err != 0) {
-		g_prefix_error(error, "received error %s: ", operation->str);
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_INTERNAL,
+			    "received error %s: %u",
+			    operation->str,
+			    err);
 		return FALSE;
 	}
 

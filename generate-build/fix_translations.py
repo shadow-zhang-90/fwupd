@@ -4,9 +4,9 @@
 #
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-import sys
 import os
 import subprocess
+import sys
 
 
 def _do_msgattrib(fn):
@@ -19,7 +19,7 @@ def _do_msgattrib(fn):
         fn,
         "--output-file=" + fn,
     ]
-    ret = subprocess.run(argv)
+    ret = subprocess.run(argv, check=False)
     if ret.returncode != 0:
         return
 

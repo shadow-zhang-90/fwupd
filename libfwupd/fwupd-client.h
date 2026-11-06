@@ -309,6 +309,18 @@ fwupd_client_install_finish(FwupdClient *self,
 			    GAsyncResult *res,
 			    GError **error) G_GNUC_WARN_UNUSED_RESULT G_GNUC_NON_NULL(1, 2);
 void
+fwupd_client_write_blob_async(FwupdClient *self,
+			      const gchar *device_id,
+			      const gchar *filename,
+			      const gchar *version,
+			      GCancellable *cancellable,
+			      GAsyncReadyCallback callback,
+			      gpointer callback_data) G_GNUC_NON_NULL(1, 2, 3);
+gboolean
+fwupd_client_write_blob_finish(FwupdClient *self,
+			       GAsyncResult *res,
+			       GError **error) G_GNUC_WARN_UNUSED_RESULT G_GNUC_NON_NULL(1, 2);
+void
 fwupd_client_install_bytes_async(FwupdClient *self,
 				 const gchar *device_id,
 				 GBytes *bytes,
@@ -466,6 +478,10 @@ fwupd_client_get_tainted(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
 gboolean
 fwupd_client_get_only_trusted(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
 gboolean
+fwupd_client_get_pending_reboot(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
+void
+fwupd_client_set_pending_reboot(FwupdClient *self, gboolean pending_reboot) G_GNUC_NON_NULL(1);
+gboolean
 fwupd_client_get_daemon_interactive(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
 guint
 fwupd_client_get_percentage(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
@@ -477,12 +493,21 @@ void
 fwupd_client_set_daemon_version(FwupdClient *self, const gchar *daemon_version) G_GNUC_NON_NULL(1);
 const gchar *
 fwupd_client_get_host_bkc(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
+void
+fwupd_client_set_host_bkc(FwupdClient *self, const gchar *host_bkc) G_GNUC_NON_NULL(1);
 const gchar *
 fwupd_client_get_host_vendor(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
+void
+fwupd_client_set_host_vendor(FwupdClient *self, const gchar *host_vendor) G_GNUC_NON_NULL(1);
 const gchar *
 fwupd_client_get_host_product(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
+void
+fwupd_client_set_host_product(FwupdClient *self, const gchar *host_product) G_GNUC_NON_NULL(1);
 const gchar *
 fwupd_client_get_host_machine_id(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
+void
+fwupd_client_set_host_machine_id(FwupdClient *self, const gchar *host_machine_id)
+    G_GNUC_NON_NULL(1);
 const gchar *
 fwupd_client_get_host_security_id(FwupdClient *self) G_GNUC_NON_NULL(1) G_GNUC_PURE;
 void
@@ -677,6 +702,10 @@ void
 fwupd_client_set_status(FwupdClient *self, FwupdStatus status) G_GNUC_NON_NULL(1);
 void
 fwupd_client_set_percentage(FwupdClient *self, gdouble percentage) G_GNUC_NON_NULL(1);
+void
+fwupd_client_set_battery_level(FwupdClient *self, guint32 battery_level) G_GNUC_NON_NULL(1);
+void
+fwupd_client_set_battery_threshold(FwupdClient *self, guint32 battery_threshold) G_GNUC_NON_NULL(1);
 
 /* only needed when not using D-Bus in in-tree CLIs */
 typedef struct FwupdClientSyncImpl FwupdClientSyncImpl;

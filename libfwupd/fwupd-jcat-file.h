@@ -9,6 +9,8 @@
 #include <gio/gio.h>
 
 #include "fwupd-codec.h"
+#include "fwupd-common.h"
+#include "fwupd-input-stream.h"
 #include "fwupd-jcat-item.h"
 
 G_BEGIN_DECLS
@@ -21,6 +23,9 @@ FwupdJcatFile *
 fwupd_jcat_file_new(void) G_GNUC_WARN_UNUSED_RESULT;
 gboolean
 fwupd_jcat_file_import_stream(FwupdJcatFile *self, GInputStream *istream, GError **error)
+    G_GNUC_NON_NULL(1, 2);
+gboolean
+fwupd_jcat_file_import_stream2(FwupdJcatFile *self, FwupdInputStream *istream, GError **error)
     G_GNUC_NON_NULL(1, 2);
 gboolean
 fwupd_jcat_file_import_bytes(FwupdJcatFile *self, GBytes *blob, GError **error)

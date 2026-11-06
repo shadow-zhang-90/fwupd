@@ -1,9 +1,6 @@
 #!/bin/sh
 set -eux
 
-# check for and install missing dependencies
-./contrib/ci/fwupd_setup_helpers.py install-dependencies --yes -o fedora
-
 # make sure gnutls is not available
 dnf remove -y gnutls-devel
 
@@ -22,5 +19,4 @@ ninja -C "$BUILD" -v
 meson test -C "$BUILD" --print-errorlogs --verbose
 
 # generate coverage report
-ninja -C "$BUILD" coverage-xml
-cp "$BUILD/meson-logs/coverage.xml" .
+./contrib/ci/coverage.py

@@ -4,10 +4,11 @@
 #
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-import dbus
 import os.path
 import sys
 import tempfile
+
+import dbus
 import gi
 
 try:
@@ -15,10 +16,11 @@ try:
 except ValueError:
     print("Missing gobject-introspection packages.  Try to install gir1.2-fwupd-2.0.")
     sys.exit(1)
-from gi.repository import Fwupd  # pylint: disable=wrong-import-position
-from simple_client import get_daemon_property, install, check_exists, modify_config
 from add_capsule_header import add_header
-from firmware_packager import make_firmware_metainfo, create_firmware_cab
+from gi.repository import Fwupd  # pylint: disable=wrong-import-position
+from simple_client import check_exists, get_daemon_property, install, modify_config
+
+from firmware_packager import create_firmware_cab, make_firmware_metainfo
 
 
 class Variables:
@@ -64,9 +66,8 @@ def find_uefi_device(client, deviceid):
     devices = client.get_devices()
     for item in devices:
         # match the device we were given
-        if deviceid:
-            if item.get_id() != deviceid:
-                continue
+        if deviceid and item.get_id() != deviceid:
+            continue
         # internal
         if not item.has_flag(Fwupd.DeviceFlags.INTERNAL):
             continue
@@ -90,9 +91,7 @@ def find_uefi_device(client, deviceid):
 def set_conf_only_trusted(client, setval):
     prop = "OnlyTrusted"
     current_val = get_daemon_property(prop)
-    if current_val:
-        pass
-    elif setval:
+    if current_val or setval:
         pass
     else:
         return False
@@ -128,7 +127,7 @@ if __name__ == "__main__":
         )
         cab = generate_cab(ARGS.exe, directory, guid, version, version_format)
         install(CLIENT, cab, deviceid, True, True)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(e)
 
     if is_restore_required:

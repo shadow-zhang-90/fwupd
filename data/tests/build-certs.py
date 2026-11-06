@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: LGPL-2.1+
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
 import os
-import sys
 import subprocess
+import sys
 import tempfile
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 
 
 def _build_certs(path: str):
@@ -36,30 +36,30 @@ def _build_certs(path: str):
         lines.append("serial = 1")
         lines.append("crl_number = 1")
         lines.append("path_len = 1")
-        lines.append('activation_date = "{}"'.format(dt_activation))
-        lines.append('expiration_date = "{}"'.format(dt_expiration))
+        lines.append(f'activation_date = "{dt_activation}"')
+        lines.append(f'expiration_date = "{dt_expiration}"')
         lines.append("ca")
         lines.append("cert_signing_key")
         lines.append("crl_signing_key")
         lines.append("code_signing_key")
-        cfg = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             mode="w", prefix="cert_", suffix=".cfg", dir=None, delete=True
-        )
-        cfg.write("\n".join(lines))
-        cfg.flush()
-        argv = [
-            "certtool",
-            "--generate-self-signed",
-            "--load-privkey",
-            ca_privkey,
-            "--template",
-            cfg.name,
-            "--outfile",
-            ca_certificate,
-        ]
-        rc = subprocess.run(argv, check=True)
-        if rc.returncode != 0:
-            return 1
+        ) as cfg:
+            cfg.write("\n".join(lines))
+            cfg.flush()
+            argv = [
+                "certtool",
+                "--generate-self-signed",
+                "--load-privkey",
+                ca_privkey,
+                "--template",
+                cfg.name,
+                "--outfile",
+                ca_certificate,
+            ]
+            rc = subprocess.run(argv, check=True)
+            if rc.returncode != 0:
+                return 1
 
     # per-user key
     user = "testuser"
@@ -73,11 +73,11 @@ def _build_certs(path: str):
     lines.append('cn = "Test Key"')
     lines.append('uri = "https://fwupd.org/testuser"')
     lines.append('email = "testuser@fwupd.org"')
-    lines.append('activation_date = "{}"'.format(dt_activation))
-    lines.append('expiration_date = "{}"'.format(dt_expiration))
+    lines.append(f'activation_date = "{dt_activation}"')
+    lines.append(f'expiration_date = "{dt_expiration}"')
     lines.append("signing_key")
     lines.append("code_signing_key")
-    cfg = tempfile.NamedTemporaryFile(
+    cfg = tempfile.NamedTemporaryFile(  # noqa: SIM115
         mode="w", prefix="cert_", suffix=".cfg", dir=None, delete=True
     )
     cfg.write("\n".join(lines))

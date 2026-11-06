@@ -11,10 +11,10 @@
 #include <fwupd.h>
 #include <libfwupdplugin/fu-acpi-table.h>
 #include <libfwupdplugin/fu-backend.h>
-#include <libfwupdplugin/fu-bios-settings.h>
+#include <libfwupdplugin/fu-bios-setting.h>
 #include <libfwupdplugin/fu-block-device.h>
 #include <libfwupdplugin/fu-block-partition.h>
-#include <libfwupdplugin/fu-bluez-device.h>
+#include <libfwupdplugin/fu-bluetooth-device.h>
 #include <libfwupdplugin/fu-byte-array.h>
 #include <libfwupdplugin/fu-bytes.h>
 #include <libfwupdplugin/fu-cab-firmware.h>
@@ -68,7 +68,6 @@
 #include <libfwupdplugin/fu-endian.h>
 #include <libfwupdplugin/fu-fdt-firmware.h>
 #include <libfwupdplugin/fu-fdt-image.h>
-#include <libfwupdplugin/fu-file-input-stream.h>
 #include <libfwupdplugin/fu-firmware-common.h>
 #include <libfwupdplugin/fu-firmware.h>
 #include <libfwupdplugin/fu-fit-firmware.h>
@@ -95,14 +94,15 @@
 #include <libfwupdplugin/fu-io-channel.h>
 #include <libfwupdplugin/fu-ioctl.h>
 #include <libfwupdplugin/fu-json-firmware.h>
+#include <libfwupdplugin/fu-json-parser.h>
 #include <libfwupdplugin/fu-kenv.h>
 #include <libfwupdplugin/fu-kernel-search-path.h>
 #include <libfwupdplugin/fu-kernel.h>
 #include <libfwupdplugin/fu-linear-firmware.h>
+#include <libfwupdplugin/fu-linux-fw-upload-device.h>
 #include <libfwupdplugin/fu-lzma-common.h>
 #include <libfwupdplugin/fu-mei-device.h>
 #include <libfwupdplugin/fu-mem.h>
-#include <libfwupdplugin/fu-memory-input-stream.h>
 #include <libfwupdplugin/fu-msgpack-item.h>
 #include <libfwupdplugin/fu-msgpack.h>
 #include <libfwupdplugin/fu-oprom-device.h>
@@ -119,7 +119,6 @@
 #include <libfwupdplugin/fu-processor-device.h>
 #include <libfwupdplugin/fu-progress.h>
 #include <libfwupdplugin/fu-protobuf.h>
-#include <libfwupdplugin/fu-ptr-array.h>
 #include <libfwupdplugin/fu-sbatlevel-section.h>
 #include <libfwupdplugin/fu-secure-bytes.h>
 #include <libfwupdplugin/fu-security-attr.h>
@@ -127,7 +126,6 @@
 #include <libfwupdplugin/fu-serio-device.h>
 #include <libfwupdplugin/fu-smbios.h>
 #include <libfwupdplugin/fu-srec-firmware.h>
-#include <libfwupdplugin/fu-stream-input-stream.h>
 #include <libfwupdplugin/fu-string.h>
 #include <libfwupdplugin/fu-sum.h>
 #include <libfwupdplugin/fu-temporary-directory.h>

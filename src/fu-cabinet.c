@@ -10,8 +10,6 @@
 
 #include <fwupdplugin.h>
 
-#include "fwupd-jcat-file.h"
-
 #include "fu-cabinet.h"
 #include "fu-jcat-context.h"
 #include "fu-jcat-engine.h"
@@ -307,9 +305,9 @@ fu_cabinet_parse_release(FuCabinet *self,
 				    FWUPD_ERROR,
 				    FWUPD_ERROR_INVALID_FILE,
 				    "contents size invalid, expected "
-				    "%zu, got %" G_GUINT64_FORMAT,
-				    streamsz,
-				    size);
+				    "%" G_GUINT64_FORMAT ", got %zu",
+				    size,
+				    streamsz);
 			return FALSE;
 		}
 	} else {
@@ -331,8 +329,8 @@ fu_cabinet_parse_release(FuCabinet *self,
 				    FWUPD_ERROR,
 				    FWUPD_ERROR_INVALID_FILE,
 				    "contents checksum invalid, expected %s, got %s",
-				    checksum,
-				    xb_node_get_text(csum_tmp));
+				    checksum_old,
+				    checksum);
 			return FALSE;
 		}
 	}
@@ -615,15 +613,13 @@ fu_cabinet_build_jcat_folder(FuCabinet *self, FuFirmware *img, GError **error)
 	}
 	if (g_str_has_suffix(fn, ".jcat")) {
 		g_autoptr(FuInputStream) istream = NULL;
-		g_autoptr(GInputStream) g_istream = NULL; /* nocheck:blocked */
 		istream = fu_firmware_get_stream(img, error);
 		if (istream == NULL)
 			return FALSE;
 		/* TODO: move this to libjcat? */
 		if (!g_seekable_seek(G_SEEKABLE(istream), 0x0, G_SEEK_SET, NULL, error))
 			return FALSE;
-		g_istream = fu_input_stream_as_g_input_stream(istream);
-		if (!fwupd_jcat_file_import_stream(self->jcat_file, g_istream, error)) {
+		if (!fwupd_jcat_file_import_stream2(self->jcat_file, istream, error)) {
 			g_prefix_error_literal(error, "failed to import JCat stream: ");
 			return FALSE;
 		}
@@ -932,14 +928,12 @@ fu_cabinet_sign(FuCabinet *self,
 	img = fu_firmware_get_image_by_id(FU_FIRMWARE(self), "firmware.jcat", NULL);
 	if (img != NULL) {
 		g_autoptr(FuInputStream) stream = NULL;
-		g_autoptr(GInputStream) g_stream = NULL; /* nocheck:blocked */
 		stream = fu_firmware_get_stream(img, error);
 		if (stream == NULL)
 			return FALSE;
 		if (!g_seekable_seek(G_SEEKABLE(stream), 0x0, G_SEEK_SET, NULL, error))
 			return FALSE;
-		g_stream = fu_input_stream_as_g_input_stream(stream);
-		if (!fwupd_jcat_file_import_stream(jcat_file, g_stream, error))
+		if (!fwupd_jcat_file_import_stream2(jcat_file, stream, error))
 			return FALSE;
 	}
 

@@ -12,6 +12,7 @@
 #include "fwupd-common-private.h"
 #include "fwupd-enums-private.h"
 #include "fwupd-error.h"
+#include "fwupd-file-input-stream.h"
 #include "fwupd-jcat-blob.h"
 #include "fwupd-jcat-file.h"
 #include "fwupd-remote-private.h"
@@ -415,10 +416,13 @@ void
 fwupd_remote_set_filename_source(FwupdRemote *self, const gchar *filename_source)
 {
 	FwupdRemotePrivate *priv = GET_PRIVATE(self);
+	g_autofree gchar *filename_abs = NULL;
+
 	g_return_if_fail(FWUPD_IS_REMOTE(self));
-	if (priv->filename_source == filename_source)
-		return;
-	g_set_str(&priv->filename_source, filename_source);
+
+	if (filename_source != NULL)
+		filename_abs = g_canonicalize_filename(filename_source, NULL);
+	g_set_str(&priv->filename_source, filename_abs);
 }
 
 static gchar *
@@ -617,15 +621,18 @@ void
 fwupd_remote_set_filename_cache(FwupdRemote *self, const gchar *filename)
 {
 	FwupdRemotePrivate *priv = GET_PRIVATE(self);
+	g_autofree gchar *filename_abs = NULL;
 
 	g_return_if_fail(FWUPD_IS_REMOTE(self));
 
-	g_set_str(&priv->filename_cache, filename);
+	if (filename != NULL)
+		filename_abs = g_canonicalize_filename(filename, NULL);
+	g_set_str(&priv->filename_cache, filename_abs);
 	g_clear_pointer(&priv->filename_cache_sig, g_free);
 
 	/* create for all non-local remote types */
 	if (priv->kind != FWUPD_REMOTE_KIND_LOCAL)
-		priv->filename_cache_sig = g_strconcat(filename, ".jcat", NULL);
+		priv->filename_cache_sig = g_strconcat(filename_abs, ".jcat", NULL);
 }
 
 /**
@@ -1432,8 +1439,7 @@ fwupd_remote_load_signature_bytes(FwupdRemote *self, GBytes *bytes, GError **err
 gboolean
 fwupd_remote_load_signature(FwupdRemote *self, const gchar *filename, GError **error)
 {
-	g_autoptr(GFile) gfile = NULL;
-	g_autoptr(GInputStream) istream = NULL;
+	g_autoptr(FwupdFileInputStream) istream = NULL;
 	g_autoptr(FwupdJcatFile) jcat_file = fwupd_jcat_file_new();
 
 	g_return_val_if_fail(FWUPD_IS_REMOTE(self), FALSE);
@@ -1441,13 +1447,10 @@ fwupd_remote_load_signature(FwupdRemote *self, const gchar *filename, GError **e
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
 	/* load JCat file */
-	gfile = g_file_new_for_path(filename);
-	istream = G_INPUT_STREAM(g_file_read(gfile, NULL, error));
-	if (istream == NULL) {
-		fwupd_error_convert(error);
+	istream = fwupd_file_input_stream_new(filename, error);
+	if (istream == NULL)
 		return FALSE;
-	}
-	if (!fwupd_jcat_file_import_stream(jcat_file, istream, error))
+	if (!fwupd_jcat_file_import_stream2(jcat_file, FWUPD_INPUT_STREAM(istream), error))
 		return FALSE;
 	return fwupd_remote_load_signature_jcat(self, jcat_file, error);
 }

@@ -5,8 +5,8 @@
 #
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-import sys
 import argparse
+import sys
 import xml.etree.ElementTree as ET
 
 XMLNS = "{http://www.gtk.org/introspection/core/1.0}"
@@ -63,20 +63,20 @@ class LdVersionScript:
         # add all class methods
         for node in cls.findall(XMLNS + "method"):
             version_tmp = self._add_node(node)
-            if version_tmp:
-                if not version_lowest or parse_version(version_tmp) < parse_version(
-                    version_lowest
-                ):
-                    version_lowest = version_tmp
+            if version_tmp and (
+                not version_lowest
+                or parse_version(version_tmp) < parse_version(version_lowest)
+            ):
+                version_lowest = version_tmp
 
         # add the constructor
         for node in cls.findall(XMLNS + "constructor"):
             version_tmp = self._add_node(node)
-            if version_tmp:
-                if not version_lowest or parse_version(version_tmp) < parse_version(
-                    version_lowest
-                ):
-                    version_lowest = version_tmp
+            if version_tmp and (
+                not version_lowest
+                or parse_version(version_tmp) < parse_version(version_lowest)
+            ):
+                version_lowest = version_tmp
 
         if "{http://www.gtk.org/introspection/glib/1.0}get-type" not in cls.attrib:
             return
@@ -102,22 +102,20 @@ class LdVersionScript:
 
     def render(self):
         # get a sorted list of all the versions
-        versions = []
-        for version in self.releases:
-            versions.append(version)
+        versions = list(self.releases)
 
         # output the version data to a file
         verout = "# generated automatically, do not edit!\n"
         oldversion = None
         for version in sorted(versions, key=parse_version):
             symbols = sorted(self.releases[version])
-            verout += "\n{}_{} {{\n".format(self.library_name, version)
+            verout += f"\n{self.library_name}_{version} {{\n"
             verout += "  global:\n"
             for symbol in symbols:
                 verout += f"    {symbol};\n"
             verout += "  local: *;\n"
             if oldversion:
-                verout += "}} {}_{};\n".format(self.library_name, oldversion)
+                verout += f"}} {self.library_name}_{oldversion};\n"
             else:
                 verout += "};\n"
             oldversion = version
@@ -138,4 +136,5 @@ if __name__ == "__main__":
         for override_symbol, override_version in args.override:
             ld.overrides[override_symbol] = override_version
     ld.import_gir(argv[1])
-    open(argv[2], "w").write(ld.render())
+    with open(argv[2], "w") as f:
+        f.write(ld.render())

@@ -12,16 +12,20 @@ plugin_deps = [
 ]
 
 plugins = {
+  # these first two plugins are used in the self tests of other plugins; build them first
+  'linux-fwattr': false,
   'uefi-capsule': false,
   'acpi-dmar': false,
   'acpi-facp': false,
   'acpi-ivrs': false,
   'acpi-phat': false,
+  'acpi-sbom': false,
   'algoltek-usb': false,
   'algoltek-usbcr': false,
   'amd-kria': false,
   'amd-pmc': false,
   'amd-gpu': false,
+  'amd-afc': false,
   'analogix': false,
   'android-boot': false,
   'asus-hid': false,
@@ -117,6 +121,7 @@ plugins = {
   'qc-s5gen2': false,
   'qsi-dock': false,
   'raydium-tp': false,
+  'realtek-alc408x': false,
   'realtek-mst': false,
   'realtek-billboard': false,
   'redfish': false,
@@ -160,6 +165,7 @@ plugins = {
   'wch-ch341a': false,
   'wch-ch347': false,
   'wistron-dock': false,
+  'xy-kbms': false,
 }
 
 umockdev_tests = []

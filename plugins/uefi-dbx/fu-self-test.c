@@ -10,8 +10,99 @@
 
 #include "fu-context-private.h"
 #include "fu-efi-signature-private.h"
+#include "fu-efi-x509-signature-private.h"
+#include "fu-uefi-dbx-common.h"
 #include "fu-uefi-dbx-device.h"
 #include "fu-uefi-device-private.h"
+
+static void
+fu_uefi_dbx_version_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *testdatadir = NULL;
+	g_autoptr(FuContext) ctx =
+	    fu_context_new_full(FU_CONTEXT_FLAG_NO_CACHE | FU_CONTEXT_FLAG_DUMMY_EFIVARS);
+	g_autoptr(FuDevice) device = g_object_new(FU_TYPE_UEFI_DBX_DEVICE, "context", ctx, NULL);
+	g_autoptr(FuEfiSignature) sig_dbx1 = fu_efi_signature_new(FU_EFI_SIGNATURE_KIND_SHA256);
+	g_autoptr(FuEfiSignature) sig_dbx2 = fu_efi_signature_new(FU_EFI_SIGNATURE_KIND_SHA256);
+	g_autoptr(FuEfiX509Signature) sig_kek = fu_efi_x509_signature_new();
+	g_autoptr(FuFirmware) siglist_dbx = fu_efi_signature_list_new();
+	g_autoptr(FuFirmware) siglist_kek = fu_efi_signature_list_new();
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(GBytes) blob_dbx = NULL;
+	g_autoptr(GBytes) blob_kek = NULL;
+	g_autoptr(GBytes) csum1 = NULL;
+	g_autoptr(GBytes) csum2 = NULL;
+	g_autoptr(GError) error = NULL;
+
+#ifndef HAVE_GNUTLS
+	/* nt possible to generate a certificate */
+	g_test_skip("this test requires GnuTLS");
+	return;
+#endif
+
+	/* do not save silo */
+	fu_context_set_path(ctx, FU_PATH_KIND_DATADIR_QUIRKS, g_test_get_dir(G_TEST_DIST));
+	ret = fu_context_load(ctx, progress, FU_CONTEXT_LOAD_FLAG_NONE, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* create a plausible KEK */
+	fu_efi_x509_signature_set_issuer(sig_kek, "C=UK,O=fwupd,CN=fwupd root CA 2012");
+	fu_efi_x509_signature_set_subject(sig_kek,
+					  "C=UK,O=Hughski Ltd.,CN=Hughski Ltd. KEK CA 2012");
+	fu_firmware_add_image(siglist_kek, FU_FIRMWARE(sig_kek), NULL);
+	blob_kek = fu_firmware_write(siglist_kek, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(blob_kek);
+	fu_uefi_device_set_guid(FU_UEFI_DEVICE(device), FU_EFIVARS_GUID_EFI_GLOBAL);
+	fu_uefi_device_set_name(FU_UEFI_DEVICE(device), "KEK");
+	ret = fu_uefi_device_set_efivar_bytes(FU_UEFI_DEVICE(device),
+					      FU_EFIVARS_GUID_EFI_GLOBAL,
+					      "KEK",
+					      blob_kek,
+					      FU_EFI_VARIABLE_ATTR_NON_VOLATILE,
+					      &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* create a plausible dbx */
+	csum1 =
+	    fu_bytes_from_string("e14c88dc48339c0555686849a4e3f8986d558e65c4fc863a1a4f1d40478bd47c",
+				 &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(csum1);
+	fu_efi_signature_set_owner(sig_dbx1, FU_EFI_SIGNATURE_GUID_MICROSOFT);
+	fu_firmware_set_bytes(FU_FIRMWARE(sig_dbx1), csum1);
+	fu_firmware_add_image(siglist_dbx, FU_FIRMWARE(sig_dbx1), NULL);
+
+	csum2 =
+	    fu_bytes_from_string("96275DFD6282A522B011177EE049296952AC794832091F937FBBF92869028629",
+				 &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(csum2);
+	fu_efi_signature_set_owner(sig_dbx2, FU_EFI_SIGNATURE_GUID_MICROSOFT);
+	fu_firmware_set_bytes(FU_FIRMWARE(sig_dbx2), csum2);
+	fu_firmware_add_image(siglist_dbx, FU_FIRMWARE(sig_dbx2), NULL);
+
+	blob_dbx = fu_firmware_write(siglist_dbx, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(blob_dbx);
+	ret = fu_uefi_device_set_efivar_bytes(FU_UEFI_DEVICE(device),
+					      FU_EFIVARS_GUID_SECURITY_DATABASE,
+					      "dbx",
+					      blob_dbx,
+					      FU_EFI_VARIABLE_ATTR_NON_VOLATILE,
+					      &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* detect version number */
+	ret = fu_device_probe(device, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_cmpstr(fu_device_get_version(device), ==, "20260402");
+}
 
 static void
 fu_uefi_dbx_zero_func(void)
@@ -40,6 +131,7 @@ fu_uefi_dbx_zero_func(void)
 	g_assert_no_error(error);
 	g_assert_nonnull(csum);
 	fu_firmware_set_bytes(FU_FIRMWARE(sig), csum);
+	fu_efi_signature_set_owner(sig, FU_EFI_SIGNATURE_GUID_ZERO);
 	fu_firmware_add_image(siglist, FU_FIRMWARE(sig), NULL);
 	blob = fu_firmware_write(siglist, &error);
 	g_assert_no_error(error);
@@ -167,6 +259,153 @@ fu_uefi_dbx_not_present_func(void)
 	g_assert_true(ret);
 }
 
+static void
+fu_uefi_dbx_prepare_firmware_func(void)
+{
+	gboolean ret;
+	g_autoptr(FuContext) ctx =
+	    fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS | FU_CONTEXT_FLAG_DUMMY_EFIVARS);
+	g_autoptr(FuDevice) device = g_object_new(FU_TYPE_UEFI_DBX_DEVICE, "context", ctx, NULL);
+	g_autoptr(FuEfiSignature) sig = fu_efi_signature_new(FU_EFI_SIGNATURE_KIND_SHA256);
+	g_autoptr(FuFirmware) auth2 = g_object_new(FU_TYPE_EFI_VARIABLE_AUTHENTICATION2, NULL);
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(GPtrArray) imgs = NULL;
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GBytes) blob_out = NULL;
+	g_autoptr(GBytes) csum = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* do not save silo */
+	fu_context_add_flag(ctx, FU_CONTEXT_FLAG_NO_CACHE);
+	ret = fu_context_load(ctx, progress, FU_CONTEXT_LOAD_FLAG_NONE, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* build a plausible signed dbx update */
+	csum =
+	    fu_bytes_from_string("418ad44c79e3fddd6a0574b24fcf0fb8fee4b3ff2be635d21a5c0852bdea635c",
+				 &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(csum);
+	fu_firmware_set_bytes(FU_FIRMWARE(sig), csum);
+	fu_firmware_add_image(auth2, FU_FIRMWARE(sig), NULL);
+	blob = fu_firmware_write(auth2, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(blob);
+
+	/* parse it back through the device */
+	stream = FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(blob));
+	firmware = fu_device_prepare_firmware(device,
+					      stream,
+					      progress,
+					      FU_FIRMWARE_PARSE_FLAG_CACHE_STREAM,
+					      &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(firmware);
+
+	/* the concrete type has to survive, so that other plugins can introspect the
+	 * payload -- see fu_snapd_uefi_plugin_composite_peek_firmware() */
+	g_assert_true(FU_IS_EFI_VARIABLE_AUTHENTICATION2(firmware));
+	imgs = fu_firmware_get_images(firmware);
+	g_assert_cmpint(imgs->len, ==, 1);
+
+	/* ...and the payload has to be byte-identical, as it is written verbatim into the
+	 * efivar by fu_uefi_dbx_device_write_firmware() */
+	blob_out = fu_firmware_get_bytes(firmware, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(blob_out);
+	g_assert_true(g_bytes_equal(blob, blob_out));
+}
+
+static void
+fu_uefi_dbx_validate_filename_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *checksum = NULL;
+	g_autofree gchar *fn_pe = NULL;
+	g_autofree gchar *fn_xml = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new();
+	g_autoptr(FuEfiSignature) sig = fu_efi_signature_new(FU_EFI_SIGNATURE_KIND_SHA256);
+	g_autoptr(FuFirmware) pefile = NULL;
+	g_autoptr(FuFirmware) pefile_tmp = fu_pefile_firmware_new();
+	g_autoptr(FuFirmware) siglist = fu_efi_signature_list_new();
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GBytes) blob_pe = NULL;
+	g_autoptr(GBytes) csum = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GFile) file_pe = NULL;
+
+	/* so FuPefileFirmware et al. can be resolved from the builder XML */
+	fu_context_add_firmware_gtypes(ctx);
+
+	/* build a plausible PE file using a builder.xml */
+	fn_xml = g_test_build_filename(G_TEST_DIST, "tests", "pefile.builder.xml", NULL);
+	g_assert_nonnull(fn_xml);
+	pefile = fu_firmware_new_from_filename(fn_xml, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(pefile);
+	blob_pe = fu_firmware_write(pefile, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(blob_pe);
+
+	/* save it to disk so it can be re-parsed as an on-ESP binary */
+	tmpdir = fu_temporary_directory_new("uefi-dbx", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	fn_pe = fu_temporary_directory_build(tmpdir, "bootx64.efi", NULL);
+	g_assert_nonnull(fn_pe);
+	ret = fu_bytes_set_contents(fn_pe, blob_pe, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* get the Authenticode checksum of the written PE file */
+	file_pe = g_file_new_for_path(fn_pe);
+	ret = fu_firmware_parse_file(pefile_tmp, file_pe, FU_FIRMWARE_PARSE_FLAG_NONE, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	checksum = fu_firmware_get_checksum(pefile_tmp, G_CHECKSUM_SHA256, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(checksum);
+
+	/* a dbx that does not contain the checksum validates fine */
+	ret = fu_uefi_dbx_signature_list_validate_filename(ctx,
+							   FU_EFI_SIGNATURE_LIST(siglist),
+							   fn_pe,
+							   FU_FIRMWARE_PARSE_FLAG_NONE,
+							   &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* add the Authenticode checksum of the PE file into the installed dbx */
+	csum = fu_bytes_from_string(checksum, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(csum);
+	fu_efi_signature_set_owner(sig, FU_EFI_SIGNATURE_GUID_MICROSOFT);
+	fu_firmware_set_bytes(FU_FIRMWARE(sig), csum);
+	fu_firmware_add_image(siglist, FU_FIRMWARE(sig), NULL);
+
+	/* now the checksum is present in the dbx, validation must fail */
+	ret = fu_uefi_dbx_signature_list_validate_filename(ctx,
+							   FU_EFI_SIGNATURE_LIST(siglist),
+							   fn_pe,
+							   FU_FIRMWARE_PARSE_FLAG_NONE,
+							   &error);
+	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_NEEDS_USER_ACTION);
+	g_assert_false(ret);
+	g_clear_error(&error);
+
+	/* a file that is not a PE file is silently ignored */
+	ret = fu_uefi_dbx_signature_list_validate_filename(ctx,
+							   FU_EFI_SIGNATURE_LIST(siglist),
+							   fn_xml,
+							   FU_FIRMWARE_PARSE_FLAG_NONE,
+							   &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -174,6 +413,9 @@ main(int argc, char **argv)
 	g_test_init(&argc, &argv, NULL);
 	g_test_add_func("/uefi-dbx/image", fu_efi_image_func);
 	g_test_add_func("/uefi-dbx/zero", fu_uefi_dbx_zero_func);
+	g_test_add_func("/uefi-dbx/version", fu_uefi_dbx_version_func);
 	g_test_add_func("/uefi-dbx/not-present", fu_uefi_dbx_not_present_func);
+	g_test_add_func("/uefi-dbx/prepare-firmware", fu_uefi_dbx_prepare_firmware_func);
+	g_test_add_func("/uefi-dbx/validate-filename", fu_uefi_dbx_validate_filename_func);
 	return g_test_run();
 }

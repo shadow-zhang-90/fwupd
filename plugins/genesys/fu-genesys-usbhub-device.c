@@ -901,7 +901,7 @@ fu_genesys_usbhub_device_get_fw_bank_version(FuGenesysUsbhubDevice *self,
 
 	/* verify bank firmware integrity */
 	blob = g_bytes_new_take(g_steal_pointer(&buf), bufsz);
-	stream = fu_memory_input_stream_new_from_bytes(blob);
+	stream = FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(blob));
 	if (!fu_genesys_usbhub_firmware_verify_checksum(stream, &error_local)) {
 		g_debug("ignoring firmware %s bank%d: %s",
 			fu_genesys_fw_type_to_string(fw_type),
@@ -1385,9 +1385,15 @@ static GBytes *
 fu_genesys_usbhub_device_dump_firmware(FuDevice *device, FuProgress *progress, GError **error)
 {
 	FuGenesysUsbhubDevice *self = FU_GENESYS_USBHUB_DEVICE(device);
-	gsize size = fu_cfi_device_get_size(self->cfi_device);
+	gsize size;
 	g_autoptr(FuDeviceLocker) locker = NULL;
 	g_autofree guint8 *buf = NULL;
+
+	/* sanity check */
+	if (self->cfi_device == NULL) {
+		g_set_error_literal(error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED, "no CFI device");
+		return NULL;
+	}
 
 	/* progress */
 	fu_progress_set_id(progress, G_STRLOC);
@@ -1403,6 +1409,7 @@ fu_genesys_usbhub_device_dump_firmware(FuDevice *device, FuProgress *progress, G
 		return NULL;
 	fu_progress_step_done(progress);
 
+	size = fu_cfi_device_get_size(self->cfi_device);
 	buf = g_malloc0(size);
 	if (!fu_genesys_usbhub_device_read_flash(self,
 						 0,
@@ -1848,6 +1855,7 @@ fu_genesys_usbhub_device_prepare(FuDevice *device,
 				 GError **error)
 {
 	FuGenesysUsbhubDevice *self = FU_GENESYS_USBHUB_DEVICE(device);
+	gboolean has_codesign = FALSE;
 	guint64 fw_max_size = fu_device_get_firmware_size_max(device);
 	g_autoptr(GArray) fw_types = g_array_new(FALSE, FALSE, sizeof(FuGenesysFwType));
 
@@ -1863,8 +1871,10 @@ fu_genesys_usbhub_device_prepare(FuDevice *device,
 		}
 
 		/* hub & codesign info must at the same bank */
-		if (i == FU_GENESYS_FW_TYPE_CODESIGN)
+		if (i == FU_GENESYS_FW_TYPE_CODESIGN) {
+			has_codesign = TRUE;
 			continue;
+		}
 
 		g_array_append_val(fw_types, i);
 	}
@@ -1887,12 +1897,6 @@ fu_genesys_usbhub_device_prepare(FuDevice *device,
 	/* query each fw bank version of fw type */
 	for (guint i = 0; i < fw_types->len; i++) {
 		FuGenesysFwType fw_type = g_array_index(fw_types, FuGenesysFwType, i);
-		/* hub & codesign info must at the same bank */
-		if (fw_type == FU_GENESYS_FW_TYPE_CODESIGN) {
-			self->update_fw_banks[fw_type] =
-			    self->update_fw_banks[FU_GENESYS_FW_TYPE_HUB];
-			continue;
-		}
 
 		if (!fu_genesys_usbhub_device_get_fw_bank_version(self,
 								  fw_type,
@@ -1932,6 +1936,12 @@ fu_genesys_usbhub_device_prepare(FuDevice *device,
 			/* bank2 is more recent than bank1: write fw on bank1 */
 			self->update_fw_banks[fw_type] = FW_BANK_1;
 		}
+	}
+
+	/* hub & codesign info must at the same bank */
+	if (has_codesign) {
+		self->update_fw_banks[FU_GENESYS_FW_TYPE_CODESIGN] =
+		    self->update_fw_banks[FU_GENESYS_FW_TYPE_HUB];
 	}
 
 	/* success */
@@ -2473,7 +2483,9 @@ fu_genesys_usbhub_device_update_firmware(FuGenesysUsbhubDevice *self,
 	}
 
 	/* progress */
-	fu_progress_set_id(progress, fu_firmware_get_id(firmware));
+	fu_progress_set_id(progress, G_STRLOC);
+	if (fu_firmware_get_id(firmware) != NULL)
+		fu_progress_set_name(progress, fu_firmware_get_id(firmware));
 	if (skip_erase) {
 		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_ERASE, 1, NULL);
 		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_VERIFY, 5, NULL);

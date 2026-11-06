@@ -58,6 +58,42 @@ fu_binder_cli_sync_impl_get_upgrades(FwupdClient *client,
 }
 
 static GPtrArray *
+fu_binder_cli_sync_impl_get_downgrades(FwupdClient *client,
+				       const gchar *device_id,
+				       gpointer user_data,
+				       GCancellable *cancellable,
+				       GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	g_autoptr(GPtrArray) releases = NULL;
+	g_autoptr(GPtrArray) downgrades = g_ptr_array_new_with_free_func(g_object_unref);
+
+	/* the daemon has no dedicated method, so filter the releases using the flags it set */
+	releases = fu_binder_cli_bridge_get_releases(self->fwupd_binder, device_id, error);
+	if (releases == NULL)
+		return NULL;
+	for (guint i = 0; i < releases->len; i++) {
+		FwupdRelease *rel = g_ptr_array_index(releases, i);
+		if (!fwupd_release_has_flag(rel, FWUPD_RELEASE_FLAG_IS_DOWNGRADE))
+			continue;
+		if (fwupd_release_has_flag(rel, FWUPD_RELEASE_FLAG_BLOCKED_VERSION))
+			continue;
+		if (fwupd_release_has_flag(rel, FWUPD_RELEASE_FLAG_IS_ALTERNATE_BRANCH))
+			continue;
+		g_ptr_array_add(downgrades, g_object_ref(rel));
+	}
+	if (downgrades->len == 0) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_NOTHING_TO_DO,
+			    "no downgrades for %s",
+			    device_id);
+		return NULL;
+	}
+	return g_steal_pointer(&downgrades);
+}
+
+static GPtrArray *
 fu_binder_cli_sync_impl_get_devices(FwupdClient *client,
 				    gpointer user_data,
 				    GCancellable *cancellable,
@@ -65,6 +101,133 @@ fu_binder_cli_sync_impl_get_devices(FwupdClient *client,
 {
 	FuBinderCli *self = FU_BINDER_CLI(user_data);
 	return fu_binder_cli_bridge_get_devices(self->fwupd_binder, error);
+}
+
+static FwupdDevice *
+fu_binder_cli_sync_impl_get_device_by_id(FwupdClient *client,
+					 const gchar *device_id,
+					 gpointer user_data,
+					 GCancellable *cancellable,
+					 GError **error)
+{
+	g_autoptr(GPtrArray) devices = NULL;
+
+	devices = fu_binder_cli_sync_impl_get_devices(client, user_data, cancellable, error);
+	if (devices == NULL)
+		return NULL;
+	for (guint i = 0; i < devices->len; i++) {
+		FwupdDevice *dev = g_ptr_array_index(devices, i);
+		if (g_strcmp0(fwupd_device_get_id(dev), device_id) == 0)
+			return g_object_ref(dev);
+	}
+	g_set_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND, "device %s not found", device_id);
+	return NULL;
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_devices_by_guid(FwupdClient *client,
+					    const gchar *guid,
+					    gpointer user_data,
+					    GCancellable *cancellable,
+					    GError **error)
+{
+	g_autoptr(GPtrArray) devices = NULL;
+	g_autoptr(GPtrArray) results = g_ptr_array_new_with_free_func(g_object_unref);
+
+	devices = fu_binder_cli_sync_impl_get_devices(client, user_data, cancellable, error);
+	if (devices == NULL)
+		return NULL;
+	for (guint i = 0; i < devices->len; i++) {
+		FwupdDevice *dev = g_ptr_array_index(devices, i);
+		if (fwupd_device_has_guid(dev, guid))
+			g_ptr_array_add(results, g_object_ref(dev));
+	}
+	return g_steal_pointer(&results);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_set_feature_flags(FwupdClient *client,
+					  FwupdFeatureFlags feature_flags,
+					  gpointer user_data,
+					  GCancellable *cancellable,
+					  GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_set_feature_flags(self->fwupd_binder, feature_flags, error);
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_history(FwupdClient *client,
+				    gpointer user_data,
+				    GCancellable *cancellable,
+				    GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_get_history(self->fwupd_binder, error);
+}
+
+static FwupdDevice *
+fu_binder_cli_sync_impl_get_results(FwupdClient *client,
+				    const gchar *device_id,
+				    gpointer user_data,
+				    GCancellable *cancellable,
+				    GError **error)
+{
+	g_autoptr(GPtrArray) devices = NULL;
+
+	/* the daemon has no dedicated method, so use the last recorded history entry */
+	devices = fu_binder_cli_sync_impl_get_history(client, user_data, cancellable, error);
+	if (devices == NULL)
+		return NULL;
+	for (guint i = 0; i < devices->len; i++) {
+		FwupdDevice *dev = g_ptr_array_index(devices, i);
+		if (g_strcmp0(fwupd_device_get_id(dev), device_id) == 0)
+			return g_object_ref(dev);
+	}
+	g_set_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND, "no results for %s", device_id);
+	return NULL;
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_releases(FwupdClient *client,
+				     const gchar *device_id,
+				     gpointer user_data,
+				     GCancellable *cancellable,
+				     GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_get_releases(self->fwupd_binder, device_id, error);
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_plugins(FwupdClient *client,
+				    gpointer user_data,
+				    GCancellable *cancellable,
+				    GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_get_plugins(self->fwupd_binder, error);
+}
+
+static FwupdRemote *
+fu_binder_cli_sync_impl_get_remote_by_id(FwupdClient *client,
+					 const gchar *remote_id,
+					 gpointer user_data,
+					 GCancellable *cancellable,
+					 GError **error)
+{
+	g_autoptr(GPtrArray) remotes = NULL;
+
+	remotes = fu_binder_cli_sync_impl_get_remotes(client, user_data, cancellable, error);
+	if (remotes == NULL)
+		return NULL;
+	for (guint i = 0; i < remotes->len; i++) {
+		FwupdRemote *remote = g_ptr_array_index(remotes, i);
+		if (g_strcmp0(fwupd_remote_get_id(remote), remote_id) == 0)
+			return g_object_ref(remote);
+	}
+	g_set_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND, "remote %s not found", remote_id);
+	return NULL;
 }
 
 static gboolean
@@ -78,38 +241,329 @@ fu_binder_cli_sync_impl_connect(FwupdClient *client,
 }
 
 static gboolean
+fu_binder_cli_sync_impl_write_blob(FwupdClient *client,
+				   const gchar *device_id,
+				   FuInputStream *stream,
+				   const gchar *filename_hint,
+				   const gchar *version,
+				   gpointer user_data,
+				   GCancellable *cancellable,
+				   GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
+
+	/* convert the FuInputStream into a FuUnixInputStream */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
+		return FALSE;
+	return fu_binder_cli_bridge_write_blob(self->fwupd_binder,
+					       device_id,
+					       fwupd_unix_input_stream_get_fd(ustream),
+					       filename_hint,
+					       version,
+					       error);
+}
+
+static gboolean
 fu_binder_cli_sync_impl_install(FwupdClient *client,
 				const gchar *device_id,
-				const gchar *filename,
+				FuInputStream *stream,
+				const gchar *filename_hint,
 				FwupdInstallFlags install_flags,
 				gpointer user_data,
 				GCancellable *cancellable,
 				GError **error)
 {
 	FuBinderCli *self = FU_BINDER_CLI(user_data);
-	gint fd;
-	g_autoptr(GUnixInputStream) stream = NULL;
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
 
-	stream = fwupd_unix_input_stream_from_fn(filename, error);
-	if (stream == NULL)
+	/* convert the FuInputStream into a FuUnixInputStream */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
 		return FALSE;
-	fd = g_unix_input_stream_get_fd(stream);
 	return fu_binder_cli_bridge_install(self->fwupd_binder,
 					    device_id,
-					    fd,
+					    fwupd_unix_input_stream_get_fd(ustream),
 					    install_flags,
+					    filename_hint,
 					    error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_update_metadata(FwupdClient *client,
+					const gchar *remote_id,
+					FuInputStream *stream,
+					FuInputStream *stream_sig,
+					gpointer user_data,
+					GCancellable *cancellable,
+					GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
+	g_autoptr(FwupdUnixInputStream) ustream_sig = NULL;
+
+	/* convert the FuInputStream into a FuUnixInputStream */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
+		return FALSE;
+	ustream_sig = fwupd_unix_input_stream_from_stream(stream_sig, error);
+	if (ustream_sig == NULL)
+		return FALSE;
+	return fu_binder_cli_bridge_update_metadata(self->fwupd_binder,
+						    remote_id,
+						    fwupd_unix_input_stream_get_fd(ustream),
+						    fwupd_unix_input_stream_get_fd(ustream_sig),
+						    error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_activate(FwupdClient *client,
+				 const gchar *device_id,
+				 gpointer user_data,
+				 GCancellable *cancellable,
+				 GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_activate(self->fwupd_binder, device_id, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_quit(FwupdClient *client,
+			     gpointer user_data,
+			     GCancellable *cancellable,
+			     GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_quit(self->fwupd_binder, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_unlock(FwupdClient *client,
+			       const gchar *device_id,
+			       gpointer user_data,
+			       GCancellable *cancellable,
+			       GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_unlock(self->fwupd_binder, device_id, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_verify(FwupdClient *client,
+			       const gchar *device_id,
+			       gpointer user_data,
+			       GCancellable *cancellable,
+			       GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_verify(self->fwupd_binder, device_id, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_verify_update(FwupdClient *client,
+				      const gchar *device_id,
+				      gpointer user_data,
+				      GCancellable *cancellable,
+				      GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_verify_update(self->fwupd_binder, device_id, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_modify_remote(FwupdClient *client,
+				      const gchar *remote_id,
+				      const gchar *key,
+				      const gchar *value,
+				      gpointer user_data,
+				      GCancellable *cancellable,
+				      GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_modify_remote(self->fwupd_binder, remote_id, key, value, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_clean_remote(FwupdClient *client,
+				     const gchar *remote_id,
+				     gpointer user_data,
+				     GCancellable *cancellable,
+				     GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_clean_remote(self->fwupd_binder, remote_id, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_modify_device(FwupdClient *client,
+				      const gchar *device_id,
+				      const gchar *key,
+				      const gchar *value,
+				      gpointer user_data,
+				      GCancellable *cancellable,
+				      GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_modify_device(self->fwupd_binder, device_id, key, value, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_modify_config(FwupdClient *client,
+				      const gchar *section,
+				      const gchar *key,
+				      const gchar *value,
+				      gpointer user_data,
+				      GCancellable *cancellable,
+				      GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_modify_config(self->fwupd_binder, section, key, value, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_reset_config(FwupdClient *client,
+				     const gchar *section,
+				     gpointer user_data,
+				     GCancellable *cancellable,
+				     GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_reset_config(self->fwupd_binder, section, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_clear_results(FwupdClient *client,
+				      const gchar *device_id,
+				      gpointer user_data,
+				      GCancellable *cancellable,
+				      GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_clear_results(self->fwupd_binder, device_id, error);
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_details(FwupdClient *client,
+				    FuInputStream *stream,
+				    gpointer user_data,
+				    GCancellable *cancellable,
+				    GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	g_autoptr(FwupdUnixInputStream) ustream = NULL;
+
+	/* convert the FuInputStream into a FuUnixInputStream */
+	ustream = fwupd_unix_input_stream_from_stream(stream, error);
+	if (ustream == NULL)
+		return NULL;
+	return fu_binder_cli_bridge_get_details(self->fwupd_binder,
+						fwupd_unix_input_stream_get_fd(ustream),
+						error);
+}
+
+static GHashTable *
+fu_binder_cli_sync_impl_get_report_metadata(FwupdClient *client,
+					    gpointer user_data,
+					    GCancellable *cancellable,
+					    GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_get_report_metadata(self->fwupd_binder, error);
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_bios_settings(FwupdClient *client,
+					  gpointer user_data,
+					  GCancellable *cancellable,
+					  GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_get_bios_settings(self->fwupd_binder, error);
+}
+
+static gboolean
+fu_binder_cli_sync_impl_modify_bios_setting(FwupdClient *client,
+					    GHashTable *settings,
+					    gpointer user_data,
+					    GCancellable *cancellable,
+					    GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_modify_bios_settings(self->fwupd_binder, settings, error);
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_host_security_attrs(FwupdClient *client,
+						gpointer user_data,
+						GCancellable *cancellable,
+						GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_get_host_security_attrs(self->fwupd_binder, error);
+}
+
+static GPtrArray *
+fu_binder_cli_sync_impl_get_host_security_events(FwupdClient *client,
+						 guint limit,
+						 gpointer user_data,
+						 GCancellable *cancellable,
+						 GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_get_host_security_events(self->fwupd_binder, limit, error);
+}
+
+static gchar *
+fu_binder_cli_sync_impl_self_sign(FwupdClient *client,
+				  const gchar *value,
+				  FwupdSelfSignFlags flags,
+				  gpointer user_data,
+				  GCancellable *cancellable,
+				  GError **error)
+{
+	FuBinderCli *self = FU_BINDER_CLI(user_data);
+	return fu_binder_cli_bridge_self_sign(self->fwupd_binder, value, flags, error);
 }
 
 static void
 fu_binder_cli_init(FuBinderCli *self)
 {
 	static FwupdClientSyncImpl impl = {
-	    .get_remotes = fu_binder_cli_sync_impl_get_remotes,
-	    .get_upgrades = fu_binder_cli_sync_impl_get_upgrades,
-	    .get_devices = fu_binder_cli_sync_impl_get_devices,
+	    .activate = fu_binder_cli_sync_impl_activate,
+	    .clean_remote = fu_binder_cli_sync_impl_clean_remote,
+	    .clear_results = fu_binder_cli_sync_impl_clear_results,
 	    .connect = fu_binder_cli_sync_impl_connect,
+	    .get_bios_settings = fu_binder_cli_sync_impl_get_bios_settings,
+	    .get_details = fu_binder_cli_sync_impl_get_details,
+	    .get_device_by_id = fu_binder_cli_sync_impl_get_device_by_id,
+	    .get_devices = fu_binder_cli_sync_impl_get_devices,
+	    .get_devices_by_guid = fu_binder_cli_sync_impl_get_devices_by_guid,
+	    .get_downgrades = fu_binder_cli_sync_impl_get_downgrades,
+	    .get_history = fu_binder_cli_sync_impl_get_history,
+	    .get_host_security_attrs = fu_binder_cli_sync_impl_get_host_security_attrs,
+	    .get_host_security_events = fu_binder_cli_sync_impl_get_host_security_events,
+	    .get_plugins = fu_binder_cli_sync_impl_get_plugins,
+	    .get_releases = fu_binder_cli_sync_impl_get_releases,
+	    .get_remote_by_id = fu_binder_cli_sync_impl_get_remote_by_id,
+	    .get_remotes = fu_binder_cli_sync_impl_get_remotes,
+	    .get_report_metadata = fu_binder_cli_sync_impl_get_report_metadata,
+	    .get_results = fu_binder_cli_sync_impl_get_results,
+	    .get_upgrades = fu_binder_cli_sync_impl_get_upgrades,
 	    .install = fu_binder_cli_sync_impl_install,
+	    .write_blob = fu_binder_cli_sync_impl_write_blob,
+	    .modify_bios_setting = fu_binder_cli_sync_impl_modify_bios_setting,
+	    .modify_config = fu_binder_cli_sync_impl_modify_config,
+	    .modify_device = fu_binder_cli_sync_impl_modify_device,
+	    .modify_remote = fu_binder_cli_sync_impl_modify_remote,
+	    .quit = fu_binder_cli_sync_impl_quit,
+	    .reset_config = fu_binder_cli_sync_impl_reset_config,
+	    .self_sign = fu_binder_cli_sync_impl_self_sign,
+	    .set_feature_flags = fu_binder_cli_sync_impl_set_feature_flags,
+	    .unlock = fu_binder_cli_sync_impl_unlock,
+	    .update_metadata = fu_binder_cli_sync_impl_update_metadata,
+	    .verify = fu_binder_cli_sync_impl_verify,
+	    .verify_update = fu_binder_cli_sync_impl_verify_update,
 	};
 	fwupd_client_set_daemon_version(fu_cli_get_client(FU_CLI(self)), PACKAGE_VERSION);
 	fwupd_client_set_sync_impl(fu_cli_get_client(FU_CLI(self)), &impl, self, NULL);

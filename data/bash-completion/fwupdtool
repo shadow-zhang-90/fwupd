@@ -31,7 +31,6 @@ _fwupdtool_cmd_list=(
 	'firmware-patch'
 	'get-bios-setting'
 	'get-updates'
-	'get-upgrades'
 	'get-details'
 	'get-firmware-types'
 	'get-firmware-gtypes'
@@ -46,9 +45,8 @@ _fwupdtool_cmd_list=(
 	'get-version-formats'
 	'hwids'
 	'update'
-	'upgrade'
 	'install'
-	'install-blob'
+	'write-blob'
 	'modify-config'
 	'modify-remote'
 	'monitor'
@@ -71,6 +69,7 @@ _fwupdtool_cmd_list=(
 	'unbind-driver'
 	'bind-driver'
 	'export-hwids'
+	'import-hwids'
 	'reboot-cleanup'
 	'vercmp'
 )
@@ -86,8 +85,6 @@ _fwupdtool_opts=(
 	'--json'
 	'--show-all'
 	'--plugins'
-	'--prepare'
-	'--cleanup'
 	'--filter'
 	'--method'
 	'--disable-ssl-strict'
@@ -121,6 +118,7 @@ fwupd_modify_config_opts=(
 	'HostBkc'
 	'IdleTimeout'
 	'IgnorePower'
+	'AllowFilenameHintForLocal'
 	'OnlyTrusted'
 	'P2pPolicy'
 	'ReleaseDedupe'
@@ -285,7 +283,7 @@ _fwupdtool()
 	esac
 
 	case $arg in
-	get-details|install|install-blob|firmware-dump|firmware-read)
+	get-details|install|write-blob|firmware-dump|firmware-read)
 		#find files
 		if [[ "$args" = "2" ]]; then
 			_filedir
@@ -387,7 +385,7 @@ _fwupdtool()
 			return 0
 		elif [[ "$args" = "4" ]]; then
 			case $prev in
-			EnumerateAllDevices|OnlyTrusted|IgnorePower|UpdateMotd|ShowDevicePrivate|ReleaseDedupe|RequireImmutableEnumeration|TestDevices)
+			EnumerateAllDevices|OnlyTrusted|IgnorePower|AllowFilenameHintForLocal|UpdateMotd|ShowDevicePrivate|ReleaseDedupe|RequireImmutableEnumeration|TestDevices)
 				COMPREPLY=( $(compgen -W "True False" -- "$cur") )
 				;;
 			AnotherWriteRequired|NeedsActivation|NeedsReboot|RegistrationSupported|RequestSupported|WriteSupported)

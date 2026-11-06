@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 import grp
-import re
 import os
+import re
 
 EXIT_CODES = {"ERROR": 1, "SUCCESS": 0, "NOTHING_TO_DO": 2}
 
@@ -22,7 +22,7 @@ def create_dirs(*args):
     qubes_gid = grp.getgrnam("qubes").gr_gid
     old_umask = os.umask(0o002)
     if args is None:
-        raise Exception("Creating directories failed, no paths given.")
+        raise ValueError("Creating directories failed, no paths given.")
     for file_path in args:
         if not os.path.exists(file_path):
             os.makedirs(file_path)
@@ -92,7 +92,7 @@ class LooseVersion:
         return self.vstring
 
     def __repr__(self):
-        return f"LooseVersion ('{str(self)}')"
+        return f"LooseVersion ('{self!s}')"
 
     def _cmp(self, other):
         if isinstance(other, str):

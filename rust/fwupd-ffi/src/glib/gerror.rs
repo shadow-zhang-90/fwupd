@@ -202,7 +202,6 @@ impl From<GIOError> for std::io::ErrorKind {
             | GIOError::NotSymbolicLink
             | GIOError::NotMountableFile => Self::Unsupported,
             GIOError::Closed | GIOError::BrokenPipe => Self::BrokenPipe,
-            GIOError::Cancelled => Self::Interrupted,
             GIOError::TimedOut => Self::TimedOut,
             GIOError::Busy | GIOError::WouldBlock | GIOError::Pending => Self::WouldBlock,
             GIOError::PartialInput => Self::UnexpectedEof,
@@ -214,7 +213,8 @@ impl From<GIOError> for std::io::ErrorKind {
             | GIOError::ProxyNeedAuth => Self::ConnectionRefused,
             GIOError::NotConnected => Self::NotConnected,
             GIOError::AddressInUse => Self::AddrInUse,
-            GIOError::NoSpace // no StorageFull on 1.75
+            GIOError::Cancelled
+            | GIOError::NoSpace // no StorageFull on 1.75
             | GIOError::NotEmpty
             | GIOError::TooManyLinks
             | GIOError::FilenameTooLong
@@ -239,15 +239,17 @@ impl From<GIOError> for std::io::ErrorKind {
 type GQuark = u32;
 
 #[allow(dead_code)]
+#[cfg(not(test))]
 extern "C" {
     /// `GQuark fwupd_error_quark(void)` -- defined in libfwupd.
-    #[cfg(not(test))]
     fn fwupd_error_quark() -> GQuark;
 
     /// `GQuark g_io_error_quark(void)` -- defined in GIO.
-    #[cfg(not(test))]
     fn g_io_error_quark() -> GQuark;
+}
 
+#[link(name = "glib-2.0")]
+extern "C" {
     /// `void g_set_error_literal(GError **err, GQuark domain, gint code, const gchar *message)`
     fn g_set_error_literal(
         err: *mut *mut GError,

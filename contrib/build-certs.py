@@ -1,9 +1,9 @@
 #!/usr/bin/python3
-# SPDX-License-Identifier: LGPL-2.1+
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
 import os
-import sys
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
@@ -20,7 +20,7 @@ def _build_certs():
     if not os.path.exists(ca_privkey):
         print("generating private key...")
         argv = ["certtool", "--generate-privkey", "--outfile", ca_privkey]
-        rc = subprocess.run(argv)
+        rc = subprocess.run(argv, check=False)
         if rc.returncode != 0:
             return 1
     if not os.path.exists(ca_certificate):
@@ -36,30 +36,30 @@ def _build_certs():
         lines.append("serial = 1")
         lines.append("crl_number = 1")
         lines.append("path_len = 1")
-        lines.append('activation_date = "{}"'.format(dt_activation))
-        lines.append('expiration_date = "{}"'.format(dt_expiration))
+        lines.append(f'activation_date = "{dt_activation}"')
+        lines.append(f'expiration_date = "{dt_expiration}"')
         lines.append("ca")
         lines.append("cert_signing_key")
         lines.append("crl_signing_key")
         lines.append("code_signing_key")
-        cfg = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             mode="w", prefix="cert_", suffix=".cfg", dir=None, delete=True
-        )
-        cfg.write("\n".join(lines))
-        cfg.flush()
-        argv = [
-            "certtool",
-            "--generate-self-signed",
-            "--load-privkey",
-            ca_privkey,
-            "--template",
-            cfg.name,
-            "--outfile",
-            ca_certificate,
-        ]
-        rc = subprocess.run(argv)
-        if rc.returncode != 0:
-            return 1
+        ) as cfg:
+            cfg.write("\n".join(lines))
+            cfg.flush()
+            argv = [
+                "certtool",
+                "--generate-self-signed",
+                "--load-privkey",
+                ca_privkey,
+                "--template",
+                cfg.name,
+                "--outfile",
+                ca_certificate,
+            ]
+            rc = subprocess.run(argv, check=False)
+            if rc.returncode != 0:
+                return 1
 
     # per-user key
     user = "rhughes"
@@ -73,11 +73,11 @@ def _build_certs():
     lines.append('cn = "Richard Hughes"')
     lines.append('uri = "https://hughsie.com/"')
     lines.append('email = "richard@hughsie.com"')
-    lines.append('activation_date = "{}"'.format(dt_activation))
-    lines.append('expiration_date = "{}"'.format(dt_expiration))
+    lines.append(f'activation_date = "{dt_activation}"')
+    lines.append(f'expiration_date = "{dt_expiration}"')
     lines.append("signing_key")
     lines.append("code_signing_key")
-    cfg = tempfile.NamedTemporaryFile(
+    cfg = tempfile.NamedTemporaryFile(  # noqa: SIM115
         mode="w", prefix="cert_", suffix=".cfg", dir=None, delete=True
     )
     cfg.write("\n".join(lines))
@@ -94,7 +94,7 @@ def _build_certs():
             "--outfile",
             user_privkey,
         ]
-        rc = subprocess.run(argv)
+        rc = subprocess.run(argv, check=False)
         if rc.returncode != 0:
             return 1
     if not os.path.exists(user_certificate):
@@ -112,7 +112,7 @@ def _build_certs():
             "--outfile",
             user_certificate,
         ]
-        rc = subprocess.run(argv)
+        rc = subprocess.run(argv, check=False)
         if rc.returncode != 0:
             return 1
 
@@ -128,7 +128,7 @@ def _build_certs():
             "--outfile",
             user_request,
         ]
-        rc = subprocess.run(argv)
+        rc = subprocess.run(argv, check=False)
         if rc.returncode != 0:
             return 1
 
@@ -152,7 +152,7 @@ def _build_certs():
             "--outfile",
             user_certificate_signed,
         ]
-        rc = subprocess.run(argv)
+        rc = subprocess.run(argv, check=False)
         if rc.returncode != 0:
             return 1
 

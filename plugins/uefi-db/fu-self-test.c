@@ -8,9 +8,12 @@
 
 #include <fwupdplugin.h>
 
+#include "fwupd-security-attr-private.h"
+
 #include "fu-context-private.h"
 #include "fu-efi-x509-signature-private.h"
 #include "fu-plugin-private.h"
+#include "fu-security-attrs-private.h"
 #include "fu-uefi-db-device.h"
 #include "fu-uefi-db-plugin.h"
 #include "fu-uefi-device-private.h"
@@ -140,12 +143,12 @@ fu_uefi_db_external_locked_device_added_func(void)
 }
 
 static GBytes *
-fu_uefi_db_self_test_build_siglist(GBytes *der, GError **error)
+fu_uefi_db_self_test_build_siglist(const gchar *subject, GError **error)
 {
 	g_autoptr(FuEfiX509Signature) sig = fu_efi_x509_signature_new();
 	g_autoptr(FuFirmware) siglist = fu_efi_signature_list_new();
 
-	fu_firmware_set_bytes(FU_FIRMWARE(sig), der);
+	fu_efi_x509_signature_set_subject(sig, subject);
 	if (!fu_firmware_add_image(siglist, FU_FIRMWARE(sig), error))
 		return NULL;
 	return fu_firmware_write(siglist, error);
@@ -162,12 +165,8 @@ fu_uefi_db_default_ids_func(void)
 	g_autoptr(FuDevice) device = NULL;
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
-	g_autoptr(FuX509Certificate) crt_db = fu_x509_certificate_new();
-	g_autoptr(FuX509Certificate) crt_default = fu_x509_certificate_new();
 	g_autoptr(GBytes) blob_db = NULL;
 	g_autoptr(GBytes) blob_default = NULL;
-	g_autoptr(GBytes) der_db = NULL;
-	g_autoptr(GBytes) der_default = NULL;
 	g_autoptr(GError) error = NULL;
 
 #ifndef HAVE_GNUTLS
@@ -196,21 +195,11 @@ fu_uefi_db_default_ids_func(void)
 	g_assert_true(ret);
 	g_assert_true(fu_context_has_hwid_flag(ctx, "use-db-default-ids"));
 
-	/* generate test certificates at runtime */
-	fu_x509_certificate_set_subject(crt_db, "O=Test,CN=Test UEFI CA 2011");
-	der_db = fu_firmware_write(FU_FIRMWARE(crt_db), &error);
-	g_assert_no_error(error);
-	g_assert_nonnull(der_db);
-	fu_x509_certificate_set_subject(crt_default, "O=Test,CN=Test UEFI CA 2023");
-	der_default = fu_firmware_write(FU_FIRMWARE(crt_default), &error);
-	g_assert_no_error(error);
-	g_assert_nonnull(der_default);
-
 	/* build signature lists */
-	blob_db = fu_uefi_db_self_test_build_siglist(der_db, &error);
+	blob_db = fu_uefi_db_self_test_build_siglist("O=Test,CN=Test UEFI CA 2011", &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(blob_db);
-	blob_default = fu_uefi_db_self_test_build_siglist(der_default, &error);
+	blob_default = fu_uefi_db_self_test_build_siglist("O=Test,CN=Test UEFI CA 2023", &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(blob_default);
 
@@ -274,7 +263,6 @@ fu_uefi_db_no_default_ids_func(void)
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(FuX509Certificate) crt_db = fu_x509_certificate_new();
 	g_autoptr(GBytes) blob_db = NULL;
-	g_autoptr(GBytes) der_db = NULL;
 	g_autoptr(GError) error = NULL;
 
 #ifndef HAVE_GNUTLS
@@ -291,11 +279,7 @@ fu_uefi_db_no_default_ids_func(void)
 	g_assert_false(fu_context_has_hwid_flag(ctx, "use-db-default-ids"));
 
 	/* generate test certificate for db */
-	fu_x509_certificate_set_subject(crt_db, "O=Test,CN=Test UEFI CA 2011");
-	der_db = fu_firmware_write(FU_FIRMWARE(crt_db), &error);
-	g_assert_no_error(error);
-	g_assert_nonnull(der_db);
-	blob_db = fu_uefi_db_self_test_build_siglist(der_db, &error);
+	blob_db = fu_uefi_db_self_test_build_siglist("O=Test,CN=Test UEFI CA 2011", &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(blob_db);
 
@@ -480,6 +464,150 @@ fu_uefi_db_windows_ca_config_override_func(void)
 	g_assert_false(fu_device_has_problem(child, FWUPD_DEVICE_PROBLEM_LOWER_PRIORITY));
 }
 
+static void
+fu_uefi_db_security_attr_production_test_cert_func(void)
+{
+	FuDevice *child;
+	GPtrArray *children;
+	gboolean ret;
+	gboolean seen_insecure_platform = FALSE;
+	g_autofree gchar *quirks_dir = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_DUMMY_EFIVARS);
+	g_autoptr(FuDevice) device = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(FuSecurityAttr) attr = NULL;
+	g_autoptr(FuSecurityAttrs) attrs = fu_security_attrs_new();
+	g_autoptr(GBytes) blob_db = NULL;
+	g_autoptr(GError) error = NULL;
+
+#ifndef HAVE_GNUTLS
+	g_test_skip("requires GnuTLS");
+	return;
+#endif
+
+	quirks_dir = g_test_build_filename(G_TEST_DIST, "tests", "quirks.d", NULL);
+	fu_context_set_path(ctx, FU_PATH_KIND_DATADIR_QUIRKS, quirks_dir);
+	fu_context_add_flag(ctx, FU_CONTEXT_FLAG_NO_CACHE);
+	ret = fu_context_load(ctx, progress, FU_CONTEXT_LOAD_FLAG_NONE, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* build a db with the default MakeCert.exe test key name */
+	blob_db = fu_uefi_db_self_test_build_siglist("O=Test,CN=Joe's-Software-Emporium", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(blob_db);
+
+	/* create the device */
+	device = g_object_new(FU_TYPE_UEFI_DB_DEVICE, "context", ctx, NULL);
+	fu_device_set_plugin(device, "uefi_db");
+	fu_uefi_device_set_guid(FU_UEFI_DEVICE(device), FU_EFIVARS_GUID_SECURITY_DATABASE);
+	fu_uefi_device_set_name(FU_UEFI_DEVICE(device), "db");
+
+	/* set the db EFI variable */
+	ret = fu_uefi_device_set_efivar_bytes(
+	    FU_UEFI_DEVICE(device),
+	    FU_EFIVARS_GUID_SECURITY_DATABASE,
+	    "db",
+	    blob_db,
+	    FU_EFI_VARIABLE_ATTR_NON_VOLATILE |
+		FU_EFI_VARIABLE_ATTR_TIME_BASED_AUTHENTICATED_WRITE_ACCESS,
+	    &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* probe should create a child with the insecure-platform problem from the quirk */
+	ret = fu_device_probe(device, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	children = fu_device_get_children(device);
+	g_assert_cmpint(children->len, >, 0);
+	for (guint i = 0; i < children->len; i++) {
+		child = g_ptr_array_index(children, i);
+		if (fu_device_has_problem(child, FWUPD_DEVICE_PROBLEM_INSECURE_PLATFORM)) {
+			seen_insecure_platform = TRUE;
+			break;
+		}
+	}
+	g_assert_true(seen_insecure_platform);
+
+	/* the production attr should be not-valid as a test key is enrolled */
+	fu_device_add_security_attrs(device, attrs);
+	attr = fu_security_attrs_get_by_appstream_id(attrs,
+						     FWUPD_SECURITY_ATTR_ID_UEFI_DB_PRODUCTION,
+						     &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(attr);
+	g_assert_cmpint(fu_security_attr_get_result(attr),
+			==,
+			FWUPD_SECURITY_ATTR_RESULT_NOT_VALID);
+	g_assert_false(fu_security_attr_has_flag(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS));
+}
+
+static void
+fu_uefi_db_security_attr_production_func(void)
+{
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
+	g_autoptr(FuDevice) device = NULL;
+	g_autoptr(FuDevice) device_child = NULL;
+	g_autoptr(FuSecurityAttr) attr = NULL;
+	g_autoptr(FuSecurityAttrs) attrs = fu_security_attrs_new();
+	g_autoptr(GError) error = NULL;
+
+	/* create a db device with a child that has no test key */
+	device = g_object_new(FU_TYPE_UEFI_DB_DEVICE, "context", ctx, NULL);
+	device_child = fu_device_new(ctx);
+	fu_device_set_id(device, "db");
+	fu_device_set_plugin(device, "uefi_db");
+	fu_device_set_id(device_child, "db-child");
+	fu_device_add_child(device, device_child);
+
+	/* run the HSI checks */
+	fu_device_add_security_attrs(device, attrs);
+
+	/* the production attr should exist and be valid */
+	attr = fu_security_attrs_get_by_appstream_id(attrs,
+						     FWUPD_SECURITY_ATTR_ID_UEFI_DB_PRODUCTION,
+						     &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(attr);
+	g_assert_cmpint(fu_security_attr_get_result(attr), ==, FWUPD_SECURITY_ATTR_RESULT_VALID);
+	g_assert_true(fu_security_attr_has_flag(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS));
+}
+
+static void
+fu_uefi_db_security_attr_production_test_key_func(void)
+{
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
+	g_autoptr(FuDevice) device = NULL;
+	g_autoptr(FuDevice) device_child = NULL;
+	g_autoptr(FuSecurityAttr) attr = NULL;
+	g_autoptr(FuSecurityAttrs) attrs = fu_security_attrs_new();
+	g_autoptr(GError) error = NULL;
+
+	/* create a db device with a child that is a test key */
+	device = g_object_new(FU_TYPE_UEFI_DB_DEVICE, "context", ctx, NULL);
+	device_child = fu_device_new(ctx);
+	fu_device_set_id(device, "db");
+	fu_device_set_plugin(device, "uefi_db");
+	fu_device_set_id(device_child, "db-child");
+	fu_device_add_problem(device_child, FWUPD_DEVICE_PROBLEM_INSECURE_PLATFORM);
+	fu_device_add_child(device, device_child);
+
+	/* run the HSI checks */
+	fu_device_add_security_attrs(device, attrs);
+
+	/* the production attr should exist and be not-valid */
+	attr = fu_security_attrs_get_by_appstream_id(attrs,
+						     FWUPD_SECURITY_ATTR_ID_UEFI_DB_PRODUCTION,
+						     &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(attr);
+	g_assert_cmpint(fu_security_attr_get_result(attr),
+			==,
+			FWUPD_SECURITY_ATTR_RESULT_NOT_VALID);
+	g_assert_false(fu_security_attr_has_flag(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -497,5 +625,11 @@ main(int argc, char **argv)
 	g_test_add_func("/uefi-db/windows-ca-dual-boot", fu_uefi_db_windows_ca_dual_boot_func);
 	g_test_add_func("/uefi-db/windows-ca-config-override",
 			fu_uefi_db_windows_ca_config_override_func);
+	g_test_add_func("/uefi-db/security-attr-production",
+			fu_uefi_db_security_attr_production_func);
+	g_test_add_func("/uefi-db/security-attr-production-test-cert",
+			fu_uefi_db_security_attr_production_test_cert_func);
+	g_test_add_func("/uefi-db/security-attr-production-test-key",
+			fu_uefi_db_security_attr_production_test_key_func);
 	return g_test_run();
 }

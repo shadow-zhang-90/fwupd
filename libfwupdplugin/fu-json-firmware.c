@@ -11,6 +11,7 @@
 #include "fu-common.h"
 #include "fu-input-stream.h"
 #include "fu-json-firmware.h"
+#include "fu-json-parser.h"
 
 /**
  * FuJsonFirmware:
@@ -25,6 +26,28 @@ typedef struct {
 G_DEFINE_TYPE_WITH_PRIVATE(FuJsonFirmware, fu_json_firmware, FU_TYPE_FIRMWARE)
 #define GET_PRIVATE(o) (fu_json_firmware_get_instance_private(o))
 
+/**
+ * fu_json_firmware_get_root: (skip):
+ * @self: a #FuJsonFirmware
+ *
+ * Gets the root JSON node for the firmware image.
+ *
+ * If the directory does not exist it is ignored
+ *
+ * Returns: (transfer full): a #FwupdJsonNode, or %NULL for error
+ *
+ * Since: 2.2.1
+ **/
+FwupdJsonNode *
+fu_json_firmware_get_root(FuJsonFirmware *self)
+{
+	FuJsonFirmwarePrivate *priv = GET_PRIVATE(self);
+	g_return_val_if_fail(FU_IS_JSON_FIRMWARE(self), NULL);
+	if (priv->json_node == NULL)
+		return NULL;
+	return fwupd_json_node_ref(priv->json_node);
+}
+
 static gboolean
 fu_json_firmware_parse(FuFirmware *firmware,
 		       FuInputStream *stream,
@@ -34,7 +57,6 @@ fu_json_firmware_parse(FuFirmware *firmware,
 	FuJsonFirmware *self = FU_JSON_FIRMWARE(firmware);
 	FuJsonFirmwarePrivate *priv = GET_PRIVATE(self);
 	g_autoptr(FwupdJsonParser) json_parser = fwupd_json_parser_new();
-	g_autoptr(GInputStream) g_stream = NULL; /* nocheck:blocked */
 
 #ifdef HAVE_FUZZER
 	/* make the fuzzer spend time on complexity, not depth or length -> OOM */
@@ -48,11 +70,8 @@ fu_json_firmware_parse(FuFirmware *firmware,
 #endif
 
 	/* just load into memory, no extraction performed */
-	g_stream = fu_input_stream_as_g_input_stream(stream);
-	priv->json_node = fwupd_json_parser_load_from_stream(json_parser,
-							     g_stream,
-							     FWUPD_JSON_LOAD_FLAG_NONE,
-							     error);
+	priv->json_node =
+	    fu_json_parser_load_from_stream(json_parser, stream, FWUPD_JSON_LOAD_FLAG_NONE, error);
 	if (priv->json_node == NULL)
 		return FALSE;
 
@@ -147,4 +166,19 @@ fu_json_firmware_class_init(FuJsonFirmwareClass *klass)
 	firmware_class->write = fu_json_firmware_write;
 	firmware_class->build = fu_json_firmware_build;
 	firmware_class->export = fu_json_firmware_export;
+}
+
+/**
+ * fu_json_firmware_new:
+ *
+ * Creates a generic JSON firmware.
+ *
+ * Returns: a #FuFirmware
+ *
+ * Since: 2.2.1
+ **/
+FuFirmware *
+fu_json_firmware_new(void)
+{
+	return FU_FIRMWARE(g_object_new(FU_TYPE_JSON_FIRMWARE, NULL));
 }

@@ -25,7 +25,7 @@
 %endif
 
 # fwupd.efi is only available on these arches
-%ifarch x86_64 aarch64 riscv64
+%ifarch x86_64 aarch64 riscv64 loongarch64
 %global have_uefi 1
 %endif
 
@@ -40,6 +40,7 @@
 
 %if 0%{?fedora}
 %global have_passim 1
+%global have_tui 1
 %endif
 
 Summary:   Firmware update daemon
@@ -57,6 +58,12 @@ Source2:   https://github.com/fwupd/%{name}/releases/download/1.9.%{libfwupd_19x
 BuildRequires: gettext
 BuildRequires: hwdata
 BuildRequires: rustc
+BuildRequires: cargo
+%if 0%{?fedora}
+BuildRequires: cargo-rpm-macros
+BuildRequires: rust-zerocopy+derive-devel
+BuildRequires: rust-libc-devel
+%endif
 BuildRequires: glib2-devel >= %{glib2_version}
 BuildRequires: libxmlb-devel >= %{libxmlb_version}
 BuildRequires: libusb1-devel >= %{libusb_version}
@@ -66,6 +73,11 @@ BuildRequires: libjcat-devel
 %endif
 BuildRequires: polkit-devel >= 0.103
 BuildRequires: python3-jinja2
+%if 0%{?have_tui}
+BuildRequires: python3-gobject
+BuildRequires: python3-pytest
+BuildRequires: python3-textual
+%endif
 BuildRequires: sqlite-devel
 BuildRequires: systemd >= %{systemd_version}
 BuildRequires: systemd-devel
@@ -115,6 +127,10 @@ Requires(postun): systemd
 Requires: glib2%{?_isa} >= %{glib2_version}
 Requires: libxmlb%{?_isa} >= %{libxmlb_version}
 Requires: shared-mime-info
+%if 0%{?have_tui}
+Requires: python3-gobject
+Requires: python3-textual
+%endif
 
 # deliberately has no _isa as libusbx in RHEL-9 does not include it
 Requires: libusb1 >= %{libusb_version}
@@ -139,7 +155,7 @@ Obsoletes: %{name}-plugin-flashrom < 2.1.4
 
 # optional, but a really good idea
 Recommends: udisks2
-Recommends: bluez
+Suggests: bluez
 Recommends: jq
 %if 0%{?have_passim}
 Recommends: passim
@@ -216,6 +232,12 @@ fwupd wrapper for Qubes OS
 %prep
 %autosetup -p1
 
+# use the crates from Fedora as the build has no network access
+%if 0%{?fedora}
+%cargo_prep
+cargo generate-lockfile --offline
+%endif
+
 # the EFI helper
 %if 0%{?libfwupd_19x_version}
 mkdir -p subprojects/fwupd-efi
@@ -277,13 +299,13 @@ cd -
 %else
     -Dpassim=disabled \
 %endif
+%if 0%{?have_tui}
+    -Dtui=enabled \
+%else
+    -Dtui=disabled \
+%endif
 %if 0%{?qubes_packages}
     -Dqubes=true \
-%endif
-%ifarch i686 x86_64
-    -Dhsi=enabled \
-%else
-    -Dhsi=disabled \
 %endif
     -Dman=true \
     -Dbluez=enabled
@@ -292,7 +314,9 @@ cd -
 
 %if 0%{?enable_tests}
 %if 0%{?enable_ci}
-    ./contrib/ci/get_test_firmware.sh
+if [ "${CI_NETWORK:-false}" = "true" ]; then
+    ./fwupbuild download-test-firmware --tests=ci-tests --dest .
+fi
 %endif
 %check
 %meson_test
@@ -342,6 +366,9 @@ systemctl --no-reload preset fwupd-refresh.timer &>/dev/null || :
 %endif
 %{_bindir}/fwupdmgr
 %{_bindir}/fwupdtool
+%if 0%{?have_tui}
+%{_bindir}/fwupdtui
+%endif
 %dir %{_sysconfdir}/fwupd
 %dir %{_sysconfdir}/fwupd/bios-settings.d
 %{_sysconfdir}/fwupd/bios-settings.d/README.md
@@ -360,6 +387,10 @@ systemctl --no-reload preset fwupd-refresh.timer &>/dev/null || :
 %{_datadir}/bash-completion/completions/fwupdmgr
 %{_datadir}/bash-completion/completions/fwupdtool
 %{_datadir}/fish/vendor_completions.d/fwupdmgr.fish
+%if 0%{?have_tui}
+%{_datadir}/bash-completion/completions/fwupdtui
+%{_datadir}/fish/vendor_completions.d/fwupdtui.fish
+%endif
 %dir %{_datadir}/fwupd
 %dir %{_datadir}/fwupd/metainfo
 %{_datadir}/fwupd/metainfo/org.freedesktop.fwupd*.metainfo.xml
@@ -372,6 +403,9 @@ systemctl --no-reload preset fwupd-refresh.timer &>/dev/null || :
 %{_datadir}/polkit-1/rules.d/org.freedesktop.fwupd.rules
 %{_datadir}/dbus-1/system-services/org.freedesktop.fwupd.service
 %{_mandir}/man1/fwupdtool.1*
+%if 0%{?have_tui}
+%{_mandir}/man1/fwupdtui.1*
+%endif
 %if 0%{?have_uefi}
 %{_mandir}/man1/dbxtool.*
 %endif
@@ -403,7 +437,6 @@ systemctl --no-reload preset fwupd-refresh.timer &>/dev/null || :
 %endif
 %{_libdir}/libfwupd.so.3*
 %{_libdir}/girepository-1.0/Fwupd-2.0.typelib
-/usr/lib/systemd/system-shutdown/fwupd.shutdown
 %dir %{_libdir}/fwupd-%{version}
 %{_libdir}/fwupd-%{version}/libfwupd*.so
 

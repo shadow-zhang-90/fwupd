@@ -2,6 +2,10 @@
 # Format: [path pattern] [space-separated list of owners]
 # Order is important: last matching pattern takes precedence
 
+# Project build bootstrap
+fwupbuild @whot
+contrib/fwupbuild/ @whot
+
 # Plugin-specific owners
 plugins/algoltek-usb/ @MasonLyu
 plugins/amd-gpu/ @superm1
@@ -62,6 +66,7 @@ plugins/qc-s5gen2/ @d4s
 plugins/qsi-dock/ @hssinf
 plugins/systemd-pcrlock/ @bluca
 plugins/raydium-tp/ @Maker-Rad
+plugins/realtek-alc408x/ @vraghav8
 plugins/realtek-mst/ @tari
 plugins/rp-pico/ @mntmn
 plugins/rts54hub/ @AnyProblem

@@ -4,8 +4,10 @@ set -euxo pipefail
 # Set Qubes Os vars if -Dqubes=true is parameter
 if [ "${QUBES:-false}" = "true" ]; then
     QUBES_OPTION='-Dqubes=true'
+    QUBES_FWUPBUILD_ARG="--qubes"
 else
     QUBES_OPTION=
+    QUBES_FWUPBUILD_ARG=
 fi
 export QUBES_OPTION
 
@@ -24,14 +26,8 @@ cp -R !(build|dist|venv) build/
 pushd build
 mv contrib/debian .
 sed -i 's/quilt/native/' debian/source/format
-#generate control file
-./contrib/ci/generate_debian.py
-
-# check if we have all deps available
-apt update -qq && apt install python3-apt -qq -y
-./contrib/ci/fwupd_setup_helpers.py install-dependencies -o debian --yes \
-    ${CROSS:+--variant "$CROSS" --cross} ||
-    true
+./fwupbuild generate-debian-packaging copyright --template ./debian/copyright.in -o ./debian/copyright
+./fwupbuild generate-debian-packaging control --template ./debian/control.in -o ./debian/control ${CROSS:+--arch $CROSS} ${QUBES_FWUPBUILD_ARG}
 
 dpkg --print-architecture
 dpkg --print-foreign-architectures

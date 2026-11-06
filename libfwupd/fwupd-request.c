@@ -284,17 +284,18 @@ fwupd_request_get_message(FwupdRequest *self)
 	/* untranslated canned messages */
 	if (fwupd_request_has_flag(self, FWUPD_REQUEST_FLAG_ALLOW_GENERIC_MESSAGE)) {
 		if (g_strcmp0(priv->id, FWUPD_REQUEST_ID_REMOVE_REPLUG) == 0)
-			return "Please unplug and then re-insert the device USB cable.";
+			return "Please unplug the device, then plug it back in.";
 		if (g_strcmp0(priv->id, FWUPD_REQUEST_ID_INSERT_USB_CABLE) == 0)
-			return "Please re-insert the device USB cable.";
+			return "Please plug the device USB cable back in.";
 		if (g_strcmp0(priv->id, FWUPD_REQUEST_ID_REMOVE_USB_CABLE) == 0)
 			return "Please unplug the device USB cable.";
 		if (g_strcmp0(priv->id, FWUPD_REQUEST_ID_REPLUG_POWER) == 0)
-			return "Please unplug and then re-insert the device power cable.";
+			return "Please unplug the device power cable, then plug it back in.";
 		if (g_strcmp0(priv->id, FWUPD_REQUEST_ID_PRESS_UNLOCK) == 0)
 			return "Press unlock on the device.";
 		if (g_strcmp0(priv->id, FWUPD_REQUEST_ID_DO_NOT_POWER_OFF) == 0)
-			return "Do not turn off your computer or remove the AC adaptor.";
+			return "Do not turn off your computer or remove the AC adaptor while the "
+			       "update is in progress.";
 		if (g_strcmp0(priv->id, FWUPD_REQUEST_ID_RESTART_DAEMON) == 0)
 			return "Please restart the fwupd service.";
 	}
@@ -501,10 +502,22 @@ fwupd_request_add_string(FwupdCodec *codec, guint idt, GString *str)
 					  FWUPD_RESULT_KEY_REQUEST_KIND,
 					  fwupd_request_kind_to_string(priv->kind));
 	}
-	fwupd_codec_string_append(str,
-				  idt,
-				  FWUPD_RESULT_KEY_FLAGS,
-				  fwupd_request_flag_to_string(priv->flags));
+	if (priv->flags != FWUPD_REQUEST_FLAG_NONE) {
+		g_autoptr(GString) flags_str = g_string_new(NULL);
+		for (guint i = 0; i < 64; i++) {
+			const gchar *tmp;
+			if ((priv->flags & ((guint64)1 << i)) == 0)
+				continue;
+			tmp = fwupd_request_flag_to_string((guint64)1 << i);
+			if (tmp == NULL)
+				continue;
+			if (flags_str->len > 0)
+				g_string_append(flags_str, "|");
+			g_string_append(flags_str, tmp);
+		}
+		if (flags_str->len > 0)
+			fwupd_codec_string_append(str, idt, FWUPD_RESULT_KEY_FLAGS, flags_str->str);
+	}
 	fwupd_codec_string_append(str, idt, FWUPD_RESULT_KEY_DEVICE_ID, priv->device_id);
 	fwupd_codec_string_append_time(str, idt, FWUPD_RESULT_KEY_CREATED, priv->created);
 	fwupd_codec_string_append(str, idt, FWUPD_RESULT_KEY_UPDATE_MESSAGE, priv->message);

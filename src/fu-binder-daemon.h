@@ -20,11 +20,93 @@ fu_binder_daemon_setup_aidl_service(FuBinderDaemon *self, GError **error);
 FuEngineRequest *
 fu_binder_daemon_create_request(FuBinderDaemon *self);
 
+void
+fu_binder_daemon_set_feature_flags(FuBinderDaemon *self, FwupdFeatureFlags feature_flags);
+
+gboolean
+fu_binder_daemon_authorize(const gchar *action_id, GError **error);
+
 gboolean
 fu_binder_daemon_perform_install_bridge(void *daemon_instance,
 					const gchar *device_id,
 					int fd,
 					guint64 flags,
+					const char *filename_hint,
 					GError **error);
+
+gboolean
+fu_binder_daemon_write_blob_bridge(void *daemon_instance,
+				   const gchar *device_id,
+				   int fd,
+				   const gchar *filename_hint,
+				   const gchar *version,
+				   GError **error);
+
+gboolean
+fu_binder_daemon_activate_bridge(void *daemon_instance, const gchar *device_id, GError **error);
+
+gboolean
+fu_binder_daemon_quit_bridge(void *daemon_instance, GError **error);
+
+gboolean
+fu_binder_daemon_verify_bridge(void *daemon_instance, const gchar *device_id, GError **error);
+
+gboolean
+fu_binder_daemon_verify_update_bridge(void *daemon_instance,
+				      const gchar *device_id,
+				      GError **error);
+
+gboolean
+fu_binder_daemon_unlock_bridge(void *daemon_instance, const gchar *device_id, GError **error);
+
+gboolean
+fu_binder_daemon_clear_results_bridge(void *daemon_instance,
+				      const gchar *device_id,
+				      GError **error);
+
+gboolean
+fu_binder_daemon_modify_device_bridge(void *daemon_instance,
+				      const gchar *device_id,
+				      const gchar *key,
+				      const gchar *value,
+				      GError **error);
+
+gboolean
+fu_binder_daemon_modify_remote_bridge(void *daemon_instance,
+				      const gchar *remote_id,
+				      const gchar *key,
+				      const gchar *value,
+				      GError **error);
+
+gboolean
+fu_binder_daemon_clean_remote_bridge(void *daemon_instance, const gchar *remote_id, GError **error);
+
+gboolean
+fu_binder_daemon_modify_config_bridge(void *daemon_instance,
+				      const gchar *section,
+				      const gchar *key,
+				      const gchar *value,
+				      GError **error);
+
+gboolean
+fu_binder_daemon_reset_config_bridge(void *daemon_instance, const gchar *section, GError **error);
+
+gboolean
+fu_binder_daemon_update_metadata_bridge(void *daemon_instance,
+					const gchar *remote_id,
+					FuInputStream *stream,
+					FuInputStream *stream_sig,
+					GError **error);
+
+gboolean
+fu_binder_daemon_set_bios_settings_bridge(void *daemon_instance,
+					  GHashTable *settings,
+					  GError **error);
+
+gchar *
+fu_binder_daemon_self_sign_bridge(void *daemon_instance,
+				  const gchar *value,
+				  guint64 flags,
+				  GError **error);
 
 G_END_DECLS

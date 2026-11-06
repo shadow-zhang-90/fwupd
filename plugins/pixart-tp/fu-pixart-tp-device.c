@@ -354,8 +354,8 @@ fu_pixart_tp_device_register_burst_write(FuPixartTpDevice *self,
 	/* send each chunk sequentially */
 	for (guint i = 0; i < chunks->len; i++) {
 		FuChunk *chk = g_ptr_array_index(chunks, i);
-		gsize chunk_sz = 0;
-		const guint8 *chunk_data = g_bytes_get_data(fu_chunk_get_bytes(chk), &chunk_sz);
+		gsize chunk_sz = fu_chunk_get_data_sz(chk);
+		const guint8 *chunk_data = fu_chunk_get_data(chk);
 
 		/* initialize payload with zeros */
 		guint8 payload[257] = {0};
@@ -1294,8 +1294,11 @@ fu_pixart_tp_device_setup(FuDevice *device, GError **error)
 	guint16 version_raw = 0;
 	g_autoptr(GByteArray) buf = NULL;
 
-	if (!fu_pixart_tp_device_ensure_vendor_reports(self, error))
-		return FALSE;
+	if (!fu_device_has_flag(FU_DEVICE(self), FWUPD_DEVICE_FLAG_EMULATED) ||
+	    fu_device_check_fwupd_version(FU_DEVICE(self), "2.1.8")) {
+		if (!fu_pixart_tp_device_ensure_vendor_reports(self, error))
+			return FALSE;
+	}
 
 	/* read tp part id */
 	buf = fu_pixart_tp_device_register_read_array(self,

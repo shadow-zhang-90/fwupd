@@ -15,7 +15,6 @@
 #include "fu-coswid-firmware.h"
 #include "fu-input-stream.h"
 #include "fu-lzma-common.h"
-#include "fu-memory-input-stream.h"
 #include "fu-partial-input-stream.h"
 #include "fu-uswid-firmware.h"
 #include "fu-uswid-struct.h"
@@ -162,8 +161,9 @@ fu_uswid_firmware_parse(FuFirmware *firmware,
 		}
 		if (!g_seekable_seek(G_SEEKABLE(istream1), 0, G_SEEK_SET, NULL, error))
 			return FALSE;
-		istream2 =
-		    fu_compressor_stream_new_decompress(istream1, FU_COMPRESSOR_FORMAT_ZLIB, error);
+		istream2 = fu_compressor_stream_new_decompress(istream1,
+							       FWUPD_COMPRESSOR_FORMAT_ZLIB,
+							       error);
 		if (istream2 == NULL)
 			return FALSE;
 		payload = fu_input_stream_read_bytes(istream2, 0, payloadsz_max + 1, NULL, error);
@@ -255,10 +255,10 @@ fu_uswid_firmware_write(FuFirmware *firmware, GError **error)
 	/* generate early so we know the size */
 	for (guint i = 0; i < images->len; i++) {
 		FuFirmware *img = g_ptr_array_index(images, i);
-		g_autoptr(GBytes) fw = fu_firmware_write(img, error);
-		if (fw == NULL)
+		g_autoptr(GByteArray) buf_tmp = fu_firmware_write_array(img, error);
+		if (buf_tmp == NULL)
 			return NULL;
-		fu_byte_array_append_bytes(payload, fw);
+		fu_byte_array_append_array(payload, buf_tmp);
 	}
 
 	/* compression flag */
@@ -267,12 +267,14 @@ fu_uswid_firmware_write(FuFirmware *firmware, GError **error)
 
 	/* compression format */
 	if (priv->compression == FU_USWID_PAYLOAD_COMPRESSION_ZLIB) {
-		g_autoptr(FuInputStream) istream1 = NULL;
+		g_autoptr(FwupdMemoryInputStream) istream1 = NULL;
 		g_autoptr(FuInputStream) istream2 = NULL;
 
-		istream1 = fu_memory_input_stream_new_from_data(payload->data, payload->len, NULL);
-		istream2 =
-		    fu_compressor_stream_new_compress(istream1, FU_COMPRESSOR_FORMAT_ZLIB, error);
+		istream1 =
+		    fwupd_memory_input_stream_new_from_data(payload->data, payload->len, NULL);
+		istream2 = fu_compressor_stream_new_compress(FWUPD_INPUT_STREAM(istream1),
+							     FWUPD_COMPRESSOR_FORMAT_ZLIB,
+							     error);
 		if (istream2 == NULL)
 			return NULL;
 		payload_blob = fu_input_stream_read_bytes(istream2, 0, G_MAXSIZE, NULL, error);

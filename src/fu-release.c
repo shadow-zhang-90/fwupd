@@ -24,7 +24,7 @@
 struct _FuRelease {
 	FwupdRelease parent_instance;
 	FuEngineRequest *request;
-	FuDevice *device;
+	FuDevice *device; /* no ref */
 	FwupdRemote *remote;
 	FuConfig *config;
 	FuInputStream *stream;
@@ -148,20 +148,30 @@ fu_release_set_device_version_old(FuRelease *self, const gchar *device_version_o
 /**
  * fu_release_set_device:
  * @self: a #FuRelease
- * @device: (nullable): a #FuDevice
+ * @device: (not nullable): a #FuDevice
  *
  * Sets the device this release should use when checking requirements.
+ *
+ * NOTE: No reference is taken on @device, as the device typically owns the release.
  **/
 void
 fu_release_set_device(FuRelease *self, FuDevice *device)
 {
 	g_return_if_fail(FU_IS_RELEASE(self));
+	g_return_if_fail(FU_IS_DEVICE(device));
+
+	if (self->device == device)
+		return;
 
 	/* make tests easier */
 	fu_device_convert_instance_ids(device);
-
-	g_set_object(&self->device, device);
 	fu_release_set_device_version_old(self, fu_device_get_version(device));
+
+	/* there is no ref on device to prevent a loop */
+	if (self->device != NULL)
+		g_object_remove_weak_pointer(G_OBJECT(self->device), (gpointer *)&self->device);
+	g_object_add_weak_pointer(G_OBJECT(device), (gpointer *)&self->device);
+	self->device = device;
 }
 
 /**
@@ -169,6 +179,8 @@ fu_release_set_device(FuRelease *self, FuDevice *device)
  * @self: a #FuRelease
  *
  * Gets the device this release was loaded for.
+ *
+ * NOTE: This is a weak reference, and may be %NULL if the device has been destroyed.
  *
  * Returns: (transfer none) (nullable): device
  **/
@@ -199,7 +211,7 @@ void
 fu_release_set_stream(FuRelease *self, FuInputStream *stream)
 {
 	g_return_if_fail(FU_IS_RELEASE(self));
-	g_return_if_fail(FU_IS_INPUT_STREAM(stream));
+	g_return_if_fail(FWUPD_IS_INPUT_STREAM(stream));
 	g_set_object(&self->stream, stream);
 }
 
@@ -782,8 +794,8 @@ fu_release_check_version(FuRelease *self,
 		return TRUE;
 	}
 
-	/* allow using no-version-expected on emulated devices, or when not build as supported */
-	if (fu_device_has_private_flag(self->device, FU_DEVICE_PRIVATE_FLAG_NO_VERSION_EXPECTED)) {
+	/* allow programmer targets on emulated devices, or when not build as supported */
+	if (fu_device_has_flag(self->device, FWUPD_DEVICE_FLAG_IS_PROGRAMMER_TARGET)) {
 #ifdef SUPPORTED_BUILD
 		if (!fu_device_has_flag(self->device, FWUPD_DEVICE_FLAG_EMULATED)) {
 			g_set_error_literal(error,
@@ -1329,6 +1341,13 @@ fu_release_ensure_trust_flags(FuRelease *self, XbNode *rel, GError **error)
 		}
 	}
 
+	/* mark releases coming from a local file or directory */
+	if (self->remote != NULL &&
+	    (fwupd_remote_get_kind(self->remote) == FWUPD_REMOTE_KIND_LOCAL ||
+	     fwupd_remote_get_kind(self->remote) == FWUPD_REMOTE_KIND_DIRECTORY)) {
+		fu_release_add_flag(self, FWUPD_RELEASE_FLAG_IS_LOCAL);
+	}
+
 	/* success */
 	return TRUE;
 }
@@ -1344,7 +1363,7 @@ const gchar *
 fu_release_get_action_id(FuRelease *self)
 {
 	/* relax authentication checks for removable devices */
-	if (!fu_device_has_flag(self->device, FWUPD_DEVICE_FLAG_INTERNAL)) {
+	if (self->device != NULL && !fu_device_has_flag(self->device, FWUPD_DEVICE_FLAG_INTERNAL)) {
 		if (fu_release_has_flag(self, FWUPD_RELEASE_FLAG_IS_DOWNGRADE)) {
 			if (fu_release_has_flag(self, FWUPD_RELEASE_FLAG_TRUSTED_PAYLOAD))
 				return "org.freedesktop.fwupd.downgrade-hotplug-trusted";
@@ -1429,7 +1448,7 @@ fu_release_finalize(GObject *obj)
 	if (self->request != NULL)
 		g_object_unref(self->request);
 	if (self->device != NULL)
-		g_object_unref(self->device);
+		g_object_remove_weak_pointer(G_OBJECT(self->device), (gpointer *)&self->device);
 	if (self->remote != NULL)
 		g_object_unref(self->remote);
 	if (self->config != NULL)

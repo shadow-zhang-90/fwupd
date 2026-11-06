@@ -20,7 +20,6 @@
 #include "fu-usb-device-fw-ds20.h"
 #include "fu-usb-device-ms-ds20.h"
 
-#define FU_ENGINE_BKC_MAX_TAGS	   100
 #define FU_ENGINE_BKC_MAX_RELEASES 1000
 
 void
@@ -35,11 +34,10 @@ static FwupdRelease *
 fu_engine_get_release_with_tag(FuEngine *self,
 			       FuEngineRequest *request,
 			       FwupdDevice *dev,
-			       const gchar *host_bkc,
+			       GPtrArray *host_bkcs,
 			       GError **error)
 {
 	g_autoptr(GPtrArray) rels = NULL;
-	g_auto(GStrv) host_bkcs = NULL;
 
 	/* find the newest release that matches */
 	rels = fu_engine_get_releases(self, request, fwupd_device_get_id(dev), error);
@@ -56,20 +54,11 @@ fu_engine_get_release_with_tag(FuEngine *self,
 			    (guint)FU_ENGINE_BKC_MAX_RELEASES);
 		return NULL;
 	}
-
-	host_bkcs = g_strsplit(host_bkc, ",", FU_ENGINE_BKC_MAX_TAGS);
-	if (g_strv_length(host_bkcs) == FU_ENGINE_BKC_MAX_TAGS) {
-		g_set_error(error,
-			    FWUPD_ERROR,
-			    FWUPD_ERROR_INVALID_DATA,
-			    "host has unreasonable BKC count: %u",
-			    (guint)FU_ENGINE_BKC_MAX_TAGS);
-		return NULL;
-	}
 	for (guint i = 0; i < rels->len; i++) {
 		FwupdRelease *rel = g_ptr_array_index(rels, i);
-		for (guint j = 0; host_bkcs[j] != NULL; j++) {
-			if (fwupd_release_has_tag(rel, host_bkcs[j]))
+		for (guint j = 0; j < host_bkcs->len; j++) {
+			const gchar *host_bkc = g_ptr_array_index(host_bkcs, j);
+			if (fwupd_release_has_tag(rel, host_bkc))
 				return g_object_ref(rel);
 		}
 	}
@@ -86,13 +75,13 @@ gboolean
 fu_engine_update_motd(FuEngine *self, GError **error)
 {
 	FuContext *ctx = fu_engine_get_context(self);
+	GPtrArray *host_bkcs = fu_context_get_host_bkcs(ctx);
 	guint upgrade_count = 0;
 	guint sync_count = 0;
 	guint reboot_count = 0;
 	g_autoptr(FuEngineRequest) request = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(GString) str = g_string_new(NULL);
-	g_autofree gchar *host_bkc = fu_context_get_config_str(ctx, "HostBkc");
 	g_autofree gchar *target = NULL;
 
 	/* a subset of what fwupdmgr can do */
@@ -109,7 +98,8 @@ fu_engine_update_motd(FuEngine *self, GError **error)
 			g_autoptr(GPtrArray) rels = NULL;
 
 			/* check if device needs reboot to complete update */
-			if (fwupd_device_get_update_state(dev) == FWUPD_UPDATE_STATE_NEEDS_REBOOT) {
+			if (fwupd_device_has_flag(dev, FWUPD_DEVICE_FLAG_SUPPORTED) &&
+			    fwupd_device_get_update_state(dev) == FWUPD_UPDATE_STATE_NEEDS_REBOOT) {
 				reboot_count++;
 				continue;
 			}
@@ -122,6 +112,8 @@ fu_engine_update_motd(FuEngine *self, GError **error)
 			}
 
 			/* get the releases for this device */
+			if (!fu_device_has_flag(dev, FWUPD_DEVICE_FLAG_SUPPORTED))
+				continue;
 			if (!fu_device_has_flag(dev, FWUPD_DEVICE_FLAG_UPDATABLE))
 				continue;
 			rels =
@@ -130,7 +122,7 @@ fu_engine_update_motd(FuEngine *self, GError **error)
 				continue;
 			upgrade_count++;
 		}
-		if (host_bkc != NULL) {
+		if (host_bkcs->len > 0) {
 			for (guint i = 0; i < devices->len; i++) {
 				FwupdDevice *dev = g_ptr_array_index(devices, i);
 				g_autoptr(FwupdRelease) rel = NULL;
@@ -143,12 +135,14 @@ fu_engine_update_motd(FuEngine *self, GError **error)
 					continue;
 				}
 
+				if (!fu_device_has_flag(dev, FWUPD_DEVICE_FLAG_SUPPORTED))
+					continue;
 				if (!fu_device_has_flag(dev, FWUPD_DEVICE_FLAG_UPDATABLE))
 					continue;
 				rel = fu_engine_get_release_with_tag(self,
 								     request,
 								     dev,
-								     host_bkc,
+								     host_bkcs,
 								     NULL);
 				if (rel == NULL)
 					continue;
@@ -489,65 +483,93 @@ fu_engine_error_array_get_best(GPtrArray *errors)
 
 /**
  * fu_engine_build_machine_id:
+ * @pstore: a #FuPathStore
  * @salt: (nullable): optional salt
+ * @host_fallback: %TRUE is we should fallback to host paths (disregarding DESTDIR)
  * @error: (nullable): optional return location for an error
  *
  * Gets a salted hash of the /etc/machine-id contents. This can be used to
  * identify a specific machine. It is not possible to recover the original
  * machine-id from the machine-hash.
  *
+ * If no machine ID can be found then one is automatically created in `/var/lib/fwupd/machine-id`
+ *
  * Returns: the SHA256 machine hash, or %NULL if the ID is not present
  **/
 gchar *
-fu_engine_build_machine_id(const gchar *salt, GError **error)
+fu_engine_build_machine_id(FuPathStore *pstore,
+			   const gchar *salt,
+			   gboolean host_fallback,
+			   GError **error)
 {
-	const gchar *machine_id;
 	gsize bufsz = 0;
+	const gchar *fn = NULL;
 	g_autofree gchar *buf = NULL;
 	g_autoptr(GChecksum) csum = NULL;
+	g_autoptr(GPtrArray) fns = g_ptr_array_new_with_free_func(g_free);
 
 	g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
-	/* in test mode */
-	machine_id = g_getenv("FWUPD_MACHINE_ID");
-	if (machine_id != NULL) {
-		buf = g_strdup(machine_id);
-		bufsz = strlen(buf);
-	} else {
-		const gchar *fn = NULL;
-		g_autoptr(GPtrArray) fns = g_ptr_array_new_with_free_func(g_free);
+	/* one of these has to exist */
 
-		/* one of these has to exist */
-		g_ptr_array_add(fns, g_build_filename(FWUPD_SYSCONFDIR, "machine-id", NULL));
-		g_ptr_array_add(
-		    fns,
-		    g_build_filename(FWUPD_LOCALSTATEDIR, "lib", "dbus", "machine-id", NULL));
+	g_ptr_array_add(fns,
+			fu_path_store_build_filename(pstore,
+						     NULL,
+						     FU_PATH_KIND_LOCALSTATEDIR_PKG,
+						     "machine-id",
+						     NULL));
+	g_ptr_array_add(fns,
+			fu_path_store_build_filename(pstore,
+						     NULL,
+						     FU_PATH_KIND_SYSCONFDIR,
+						     "machine-id",
+						     NULL));
+	g_ptr_array_add(fns,
+			fu_path_store_build_filename(pstore,
+						     NULL,
+						     FU_PATH_KIND_LOCALSTATEDIR,
+						     "lib",
+						     "dbus",
+						     "machine-id",
+						     NULL));
+	if (host_fallback) {
 		g_ptr_array_add(fns, g_strdup("/etc/machine-id"));
 		g_ptr_array_add(fns, g_strdup("/var/lib/dbus/machine-id"));
 		g_ptr_array_add(fns, g_strdup("/var/db/dbus/machine-id"));
-		/* this is the hardcoded path for homebrew, e.g. `sudo dbus-uuidgen --ensure` */
 		g_ptr_array_add(fns, g_strdup("/usr/local/var/lib/dbus/machine-id"));
-		for (guint i = 0; i < fns->len; i++) {
-			const gchar *fn_tmp = g_ptr_array_index(fns, i);
-			if (g_file_test(fn_tmp, G_FILE_TEST_EXISTS)) {
-				fn = fn_tmp;
-				break;
-			}
+	}
+	for (guint i = 0; i < fns->len; i++) {
+		const gchar *fn_tmp = g_ptr_array_index(fns, i);
+		if (fn_tmp == NULL)
+			continue;
+		if (g_file_test(fn_tmp, G_FILE_TEST_EXISTS)) {
+			fn = fn_tmp;
+			break;
 		}
+	}
+	if (fn == NULL) {
+		fn = g_ptr_array_index(fns, 0);
 		if (fn == NULL) {
 			g_set_error_literal(error,
 					    FWUPD_ERROR,
 					    FWUPD_ERROR_READ,
-					    "The machine-id is not present");
+					    "machine-id is not defined");
 			return NULL;
 		}
+		buf = g_uuid_string_random();
+		bufsz = strlen(buf);
+		if (!fu_path_mkdir_parent(fn, error))
+			return NULL;
+		if (!g_file_set_contents(fn, buf, bufsz, error))
+			return NULL;
+	} else {
 		if (!g_file_get_contents(fn, &buf, &bufsz, error))
 			return NULL;
 		if (bufsz == 0) {
 			g_set_error_literal(error,
 					    FWUPD_ERROR,
 					    FWUPD_ERROR_READ,
-					    "The machine-id is present but unset");
+					    "machine-id present but unset");
 			return NULL;
 		}
 	}

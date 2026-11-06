@@ -15,6 +15,8 @@
 #include "fu-plugin-private.h"
 #include "fu-redfish-backend.h"
 #include "fu-redfish-common.h"
+#include "fu-redfish-device.h"
+#include "fu-redfish-hpe-device.h"
 #include "fu-redfish-network.h"
 #include "fu-redfish-plugin.h"
 #include "fu-redfish-smc-device.h"
@@ -27,6 +29,19 @@ typedef struct {
 	FuPlugin *hpe_plugin;
 	FuPlugin *dell_plugin;
 } FuTest;
+
+static void
+fu_redfish_firmware_func(void)
+{
+	GType firmware_gtype;
+	g_autoptr(FuDevice) device = g_object_new(FU_TYPE_REDFISH_DEVICE, NULL);
+	g_autoptr(FuFirmware) firmware = NULL;
+
+	firmware_gtype = fu_device_get_firmware_gtype(device);
+	g_assert_cmpint(firmware_gtype, !=, G_TYPE_INVALID);
+	firmware = g_object_new(firmware_gtype, NULL);
+	g_assert_cmpuint(fu_firmware_get_size_max(firmware), ==, 512 * FU_MB);
+}
 
 static void
 fu_self_init(FuTest *self)
@@ -148,6 +163,66 @@ fu_self_init(FuTest *self)
 		g_assert_no_error(error);
 		g_assert_true(ret);
 	}
+}
+
+static void
+fu_redfish_ipmi_probe_func(void)
+{
+#ifdef HAVE_LINUX_IPMI_H
+	gboolean ret;
+	g_autofree gchar *str = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new();
+	g_autoptr(FuDevice) device = FU_DEVICE(fu_ipmi_device_new(ctx));
+	g_autoptr(FuDeviceEvent) ev_exists = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* probe finds the first node that exists */
+	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_EMULATED);
+	ev_exists = fu_device_event_new("FileExists:Filename=/dev/ipmi0");
+	fu_device_event_set_i64(ev_exists, "Exists", 1);
+	fu_device_add_event(device, ev_exists);
+	ret = fu_device_probe(device, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_cmpstr(fu_device_get_physical_id(device), ==, "/dev/ipmi0");
+
+	/* the unset version info is still printable */
+	str = fu_device_to_string(device);
+	g_assert_nonnull(str);
+#else
+	g_test_skip("no linux/ipmi.h, so skipping");
+#endif
+}
+
+static void
+fu_redfish_ipmi_probe_missing_func(void)
+{
+#ifdef HAVE_LINUX_IPMI_H
+	gboolean ret;
+	g_autoptr(FuContext) ctx = fu_context_new();
+	g_autoptr(FuDevice) device = FU_DEVICE(fu_ipmi_device_new(ctx));
+	g_autoptr(FuDeviceEvent) ev_missing0 = NULL;
+	g_autoptr(FuDeviceEvent) ev_missing1 = NULL;
+	g_autoptr(FuDeviceEvent) ev_missing2 = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* probe fails when none of the nodes exist */
+	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_EMULATED);
+	ev_missing0 = fu_device_event_new("FileExists:Filename=/dev/ipmi0");
+	fu_device_event_set_i64(ev_missing0, "Exists", 0);
+	fu_device_add_event(device, ev_missing0);
+	ev_missing1 = fu_device_event_new("FileExists:Filename=/dev/ipmi/0");
+	fu_device_event_set_i64(ev_missing1, "Exists", 0);
+	fu_device_add_event(device, ev_missing1);
+	ev_missing2 = fu_device_event_new("FileExists:Filename=/dev/ipmidev/0");
+	fu_device_event_set_i64(ev_missing2, "Exists", 0);
+	fu_device_add_event(device, ev_missing2);
+	ret = fu_device_probe(device, &error);
+	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
+	g_assert_false(ret);
+#else
+	g_test_skip("no linux/ipmi.h, so skipping");
+#endif
 }
 
 static void
@@ -290,6 +365,154 @@ fu_redfish_backend_session_key_empty_func(void)
 }
 
 static void
+fu_redfish_backend_device_gtype_unmatched_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *quirk_fn = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_CACHE);
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(FuRedfishBackend) backend = fu_redfish_backend_new(ctx);
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* write a quirk for a _different_ system */
+	tmpdir = fu_temporary_directory_new("redfish-gtype-invalid", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	quirk_fn = fu_temporary_directory_build(tmpdir, "redfish.quirk", NULL);
+	ret = g_file_set_contents(quirk_fn,
+				  "[2d2a4a8b-6a35-5b3a-9a4e-3c2f2c6e2b1a]\n"
+				  "RedfishDeviceGType = FuRedfishHpeDevice\n",
+				  -1,
+				  &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	fu_context_set_tmpdir(ctx, FU_PATH_KIND_DATADIR_QUIRKS, tmpdir);
+	fu_context_add_quirk_key(ctx, "RedfishDeviceGType");
+	fu_hwids_add_guid(fu_context_get_hwids(ctx), "93f84748-c854-5d6b-b78a-13c2361e0758");
+	ret = fu_context_load(ctx, progress, FU_CONTEXT_LOAD_FLAG_HWID_CONFIG, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	ret = fu_redfish_backend_ensure_device_gtype(backend, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_cmpint(fu_redfish_backend_get_device_gtype(backend), ==, FU_TYPE_REDFISH_DEVICE);
+}
+
+static void
+fu_redfish_backend_device_gtype_hpe_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *quirk_fn = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_CACHE);
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(FuRedfishBackend) backend = fu_redfish_backend_new(ctx);
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* write a quirk for a HPE system */
+	tmpdir = fu_temporary_directory_new("redfish-gtype-hpe", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	quirk_fn = fu_temporary_directory_build(tmpdir, "redfish.quirk", NULL);
+	ret = g_file_set_contents(quirk_fn,
+				  "[93f84748-c854-5d6b-b78a-13c2361e0758]\n"
+				  "RedfishDeviceGType = FuRedfishHpeDevice\n",
+				  -1,
+				  &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	fu_context_set_tmpdir(ctx, FU_PATH_KIND_DATADIR_QUIRKS, tmpdir);
+	fu_context_add_quirk_key(ctx, "RedfishDeviceGType");
+	fu_hwids_add_guid(fu_context_get_hwids(ctx), "93f84748-c854-5d6b-b78a-13c2361e0758");
+	ret = fu_context_load(ctx, progress, FU_CONTEXT_LOAD_FLAG_HWID_CONFIG, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	ret = fu_redfish_backend_ensure_device_gtype(backend, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_cmpint(fu_redfish_backend_get_device_gtype(backend),
+			==,
+			FU_TYPE_REDFISH_HPE_DEVICE);
+}
+
+static void
+fu_redfish_backend_device_gtype_invalid_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *quirk_fn = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_CACHE);
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(FuRedfishBackend) backend = fu_redfish_backend_new(ctx);
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* write a quirk for a HPE system */
+	tmpdir = fu_temporary_directory_new("redfish-gtype-invalid", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	quirk_fn = fu_temporary_directory_build(tmpdir, "redfish.quirk", NULL);
+	ret = g_file_set_contents(quirk_fn,
+				  "[93f84748-c854-5d6b-b78a-13c2361e0758]\n"
+				  "RedfishDeviceGType = FuDevice\n",
+				  -1,
+				  &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	fu_context_set_tmpdir(ctx, FU_PATH_KIND_DATADIR_QUIRKS, tmpdir);
+	fu_context_add_quirk_key(ctx, "RedfishDeviceGType");
+	fu_hwids_add_guid(fu_context_get_hwids(ctx), "93f84748-c854-5d6b-b78a-13c2361e0758");
+	ret = fu_context_load(ctx, progress, FU_CONTEXT_LOAD_FLAG_HWID_CONFIG, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	ret = fu_redfish_backend_ensure_device_gtype(backend, &error);
+	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
+	g_assert_false(ret);
+}
+
+static void
+fu_redfish_bearer_token_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *testdatadir = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new();
+	g_autoptr(FuPlugin) plugin = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* set up test harness, using an empty sysfs directory so that the bearer token is the
+	 * only credential the plugin can find */
+	tmpdir = fu_temporary_directory_new("redfish", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	testdatadir = g_test_build_filename(G_TEST_DIST, "tests", NULL);
+	fu_context_set_path(ctx, FU_PATH_KIND_SYSFSDIR_FW, fu_temporary_directory_get_path(tmpdir));
+	fu_context_set_path(ctx, FU_PATH_KIND_SYSCONFDIR_PKG, testdatadir);
+	fu_context_add_flag(ctx, FU_CONTEXT_FLAG_NO_CACHE);
+
+	fu_config_set_basename(fu_context_get_config(ctx), "redfish-bearer-fwupd.conf");
+	ret = fu_context_load(ctx, progress, FU_CONTEXT_LOAD_FLAG_NONE, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* the bearer token replaces the BMC user account, so this should not fail trying to
+	 * verify or create one using IPMI */
+	plugin = fu_plugin_new_from_gtype(fu_redfish_plugin_get_type(), ctx);
+	ret = fu_plugin_runner_startup(plugin, progress, &error);
+	if (g_error_matches(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_FILE)) {
+		g_debug("ignoring: %s", error->message);
+		g_test_skip("no redfish.py running");
+		return;
+	}
+	g_assert_no_error(error);
+	g_assert_true(ret);
+}
+
+static void
 fu_redfish_common_func(void)
 {
 	const guint8 buf[16] = {0x00,
@@ -315,7 +538,7 @@ fu_redfish_common_func(void)
 	ipv4 = fu_redfish_common_buffer_to_ipv4(buf);
 	g_assert_cmpstr(ipv4, ==, "0.1.2.3");
 	ipv6 = fu_redfish_common_buffer_to_ipv6(buf);
-	g_assert_cmpstr(ipv6, ==, "00010203:04050607:08090a0b:0c0d0e0f");
+	g_assert_cmpstr(ipv6, ==, "0001:0203:0405:0607:0809:0a0b:0c0d:0e0f");
 	maca = fu_redfish_common_buffer_to_mac(buf);
 	g_assert_cmpstr(maca, ==, "00:01:02:03:04:05");
 }
@@ -551,6 +774,39 @@ fu_redfish_dell_devices_func(gconstpointer user_data)
 }
 
 static void
+fu_redfish_hpe_devices_func(gconstpointer user_data)
+{
+	FuDevice *dev;
+	FuTest *self = (FuTest *)user_data;
+	GPtrArray *devices;
+
+	devices = fu_plugin_get_devices(self->hpe_plugin);
+	g_assert_nonnull(devices);
+	if (devices->len == 0) {
+		g_test_skip("no redfish support");
+		return;
+	}
+	g_assert_cmpint(devices->len, ==, 2);
+
+	/* the class and each target on their own, and every pair of the two */
+	dev = g_ptr_array_index(devices, 1);
+	g_assert_true(fu_device_has_guid(dev, "aa148d2e-6e09-453e-bc6f-63baa5f5ccc4"));
+	g_assert_true(fu_device_has_guid(dev, "00000000-0000-0000-0000-000000000229"));
+	g_assert_true(fu_device_has_guid(dev, "00000000-0000-0000-0000-000001413436"));
+	g_assert_true(
+	    fu_device_has_guid(dev,
+			       "REDFISH\\VENDOR_HPE&CLASS_aa148d2e-6e09-453e-bc6f-63baa5f5ccc4"
+			       "&TARGET_00000000-0000-0000-0000-000000000229"));
+	g_assert_true(
+	    fu_device_has_guid(dev,
+			       "REDFISH\\VENDOR_HPE&CLASS_aa148d2e-6e09-453e-bc6f-63baa5f5ccc4"
+			       "&TARGET_00000000-0000-0000-0000-000001413436"));
+
+	/* what a firmware provides to match the pair, as computed by the metadata generators */
+	g_assert_true(fu_device_has_guid(dev, "1de03887-13fd-5d0a-9c3f-eb4fc4453857"));
+}
+
+static void
 fu_redfish_hpe_update_func(gconstpointer user_data)
 {
 	FuDevice *dev;
@@ -720,6 +976,177 @@ fu_redfish_smc_update_func(gconstpointer user_data)
 }
 
 static void
+fu_redfish_target_identity_func(gconstpointer user_data)
+{
+	FuDevice *dev;
+	FuTest *self = (FuTest *)user_data;
+	GPtrArray *devices;
+	gboolean ret;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GBytes) blob_fw = NULL;
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+
+	fu_progress_add_flag(progress, FU_PROGRESS_FLAG_NO_PROFILE);
+
+	devices = fu_plugin_get_devices(self->plugin);
+	g_assert_nonnull(devices);
+	if (devices->len == 0) {
+		g_test_skip("no redfish support");
+		return;
+	}
+	g_assert_cmpint(devices->len, ==, 2);
+
+	/* the mock reassigns this member to a different component as the task
+	 * completes, so the update must not be credited to the selected device */
+	dev = g_ptr_array_index(devices, 1);
+
+	/* an earlier update on this device may have left the reboot flag set, which
+	 * would short-circuit polling before the task reaches completion */
+	fu_device_remove_flag(dev, FWUPD_DEVICE_FLAG_NEEDS_REBOOT);
+
+	blob_fw = g_bytes_new_static("shift", 5);
+	firmware = fu_firmware_new_from_bytes(blob_fw);
+	fu_firmware_set_filename(firmware, "firmware.exe");
+	ret = fu_plugin_runner_write_firmware(self->plugin,
+					      dev,
+					      firmware,
+					      progress,
+					      FWUPD_INSTALL_FLAG_NONE,
+					      &error);
+	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_FILE);
+	g_assert_false(ret);
+	g_assert_nonnull(g_strstr_len(error->message, -1, "target identity changed"));
+}
+
+static void
+fu_redfish_target_identity_reset_func(gconstpointer user_data)
+{
+	FuDevice *dev;
+	FuTest *self = (FuTest *)user_data;
+	GPtrArray *devices;
+	gboolean ret;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GBytes) blob_fw = NULL;
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+
+	fu_progress_add_flag(progress, FU_PROGRESS_FLAG_NO_PROFILE);
+
+	devices = fu_plugin_get_devices(self->plugin);
+	g_assert_nonnull(devices);
+	if (devices->len == 0) {
+		g_test_skip("no redfish support");
+		return;
+	}
+	g_assert_cmpint(devices->len, ==, 2);
+
+	dev = g_ptr_array_index(devices, 1);
+	fu_device_remove_flag(dev, FWUPD_DEVICE_FLAG_NEEDS_REBOOT);
+
+	/* the task signals a required reset before it completes, so polling stops
+	 * early; the member has not settled yet, so identity is not confirmed here
+	 * and the update proceeds with the reboot flag set */
+	blob_fw = g_bytes_new_static("reset-shift", 11);
+	firmware = fu_firmware_new_from_bytes(blob_fw);
+	fu_firmware_set_filename(firmware, "firmware.exe");
+	ret = fu_plugin_runner_write_firmware(self->plugin,
+					      dev,
+					      firmware,
+					      progress,
+					      FWUPD_INSTALL_FLAG_NONE,
+					      &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_true(fu_device_has_flag(dev, FWUPD_DEVICE_FLAG_NEEDS_REBOOT));
+}
+
+static void
+fu_redfish_target_identity_empty_func(gconstpointer user_data)
+{
+	FuDevice *dev;
+	FuTest *self = (FuTest *)user_data;
+	GPtrArray *devices;
+	gboolean ret;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GBytes) blob_fw = NULL;
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+
+	fu_progress_add_flag(progress, FU_PROGRESS_FLAG_NO_PROFILE);
+
+	devices = fu_plugin_get_devices(self->plugin);
+	g_assert_nonnull(devices);
+	if (devices->len == 0) {
+		g_test_skip("no redfish support");
+		return;
+	}
+	g_assert_cmpint(devices->len, ==, 2);
+
+	dev = g_ptr_array_index(devices, 1);
+	fu_device_remove_flag(dev, FWUPD_DEVICE_FLAG_NEEDS_REBOOT);
+
+	/* the task completes, but the member readback returns an empty body; this
+	 * must fail cleanly rather than dereference a missing JSON object */
+	blob_fw = g_bytes_new_static("empty-shift", 11);
+	firmware = fu_firmware_new_from_bytes(blob_fw);
+	fu_firmware_set_filename(firmware, "firmware.exe");
+	ret = fu_plugin_runner_write_firmware(self->plugin,
+					      dev,
+					      firmware,
+					      progress,
+					      FWUPD_INSTALL_FLAG_NONE,
+					      &error);
+	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_DATA);
+	g_assert_false(ret);
+	g_assert_nonnull(g_strstr_len(error->message, -1, "no object"));
+}
+
+static void
+fu_redfish_target_identity_case_func(gconstpointer user_data)
+{
+	FuDevice *dev;
+	FuTest *self = (FuTest *)user_data;
+	GPtrArray *devices;
+	gboolean ret;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GBytes) blob_fw = NULL;
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+
+	fu_progress_add_flag(progress, FU_PROGRESS_FLAG_NO_PROFILE);
+
+	devices = fu_plugin_get_devices(self->plugin);
+	g_assert_nonnull(devices);
+	if (devices->len == 0) {
+		g_test_skip("no redfish support");
+		return;
+	}
+	g_assert_cmpint(devices->len, ==, 2);
+
+	/* the BMC reports a SoftwareId with capital letters */
+	dev = g_ptr_array_index(devices, 1);
+	g_assert_true(
+	    fu_device_has_guid(dev, "REDFISH\\VENDOR_Lenovo&SOFTWAREID_UEFI-AFE1-6&TYPE_UNSIGNED"));
+	fu_device_remove_flag(dev, FWUPD_DEVICE_FLAG_NEEDS_REBOOT);
+
+	/* the task completes without a reset and the readback reports the same
+	 * SoftwareId, so the identity must be confirmed without any case folding */
+	blob_fw = g_bytes_new_static("same", 4);
+	firmware = fu_firmware_new_from_bytes(blob_fw);
+	fu_firmware_set_filename(firmware, "firmware.exe");
+	ret = fu_plugin_runner_write_firmware(self->plugin,
+					      dev,
+					      firmware,
+					      progress,
+					      FWUPD_INSTALL_FLAG_NONE,
+					      &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_false(fu_device_has_flag(dev, FWUPD_DEVICE_FLAG_NEEDS_REBOOT));
+}
+
+static void
 fu_self_free(FuTest *self)
 {
 	if (self->plugin != NULL)
@@ -748,6 +1175,7 @@ main(int argc, char **argv)
 
 	(void)g_setenv("G_TEST_SRCDIR", SRCDIR, FALSE);
 	g_test_init(&argc, &argv, NULL);
+	g_type_ensure(FU_TYPE_REDFISH_HPE_DEVICE);
 
 	smbios_data_fn =
 	    g_test_build_filename(G_TEST_DIST, "tests", "redfish-smbios.builder.xml", NULL);
@@ -755,6 +1183,8 @@ main(int argc, char **argv)
 
 	fu_self_init(self);
 	g_test_add_func("/redfish/ipmi", fu_redfish_ipmi_func);
+	g_test_add_func("/redfish/ipmi/probe", fu_redfish_ipmi_probe_func);
+	g_test_add_func("/redfish/ipmi/probe-missing", fu_redfish_ipmi_probe_missing_func);
 	g_test_add_func("/redfish/backend/session-key/none",
 			fu_redfish_backend_session_key_none_func);
 	g_test_add_func("/redfish/backend/session-key/missing",
@@ -763,7 +1193,15 @@ main(int argc, char **argv)
 			fu_redfish_backend_session_key_valid_func);
 	g_test_add_func("/redfish/backend/session-key/empty",
 			fu_redfish_backend_session_key_empty_func);
+	g_test_add_func("/redfish/backend/device-gtype/unmatched",
+			fu_redfish_backend_device_gtype_unmatched_func);
+	g_test_add_func("/redfish/backend/device-gtype/hpe",
+			fu_redfish_backend_device_gtype_hpe_func);
+	g_test_add_func("/redfish/backend/device-gtype/invalid",
+			fu_redfish_backend_device_gtype_invalid_func);
+	g_test_add_func("/redfish/bearer-token", fu_redfish_bearer_token_func);
 	g_test_add_func("/redfish/common", fu_redfish_common_func);
+	g_test_add_func("/redfish/firmware", fu_redfish_firmware_func);
 	g_test_add_func("/redfish/common/version", fu_redfish_common_version_func);
 	g_test_add_func("/redfish/common/lenovo", fu_redfish_common_lenovo_func);
 	g_test_add_func("/redfish/network/mac_addr", fu_redfish_network_mac_addr_func);
@@ -773,9 +1211,22 @@ main(int argc, char **argv)
 			     fu_redfish_unlicensed_devices_func);
 	g_test_add_data_func("/redfish/smc_plugin/devices", self, fu_redfish_smc_devices_func);
 	g_test_add_data_func("/redfish/smc-plugin/update", self, fu_redfish_smc_update_func);
+	g_test_add_data_func("/redfish/hpe-plugin/devices", self, fu_redfish_hpe_devices_func);
 	g_test_add_data_func("/redfish/hpe-plugin/update", self, fu_redfish_hpe_update_func);
 	g_test_add_data_func("/redfish/plugin/devices", self, fu_redfish_devices_func);
 	g_test_add_data_func("/redfish/dell/devices", self, fu_redfish_dell_devices_func);
 	g_test_add_data_func("/redfish/plugin/update", self, fu_redfish_update_func);
+	g_test_add_data_func("/redfish/plugin/target-identity",
+			     self,
+			     fu_redfish_target_identity_func);
+	g_test_add_data_func("/redfish/plugin/target-identity-reset",
+			     self,
+			     fu_redfish_target_identity_reset_func);
+	g_test_add_data_func("/redfish/plugin/target-identity-empty",
+			     self,
+			     fu_redfish_target_identity_empty_func);
+	g_test_add_data_func("/redfish/plugin/target-identity-case",
+			     self,
+			     fu_redfish_target_identity_case_func);
 	return g_test_run();
 }

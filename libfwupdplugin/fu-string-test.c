@@ -127,6 +127,21 @@ fu_strsplit_func(void)
 	g_assert_true(ret);
 	/* we have an empty last section */
 	g_assert_cmpint(cnt, ==, bigsz + 1);
+
+	/* the size has to be respected, as the buffer may not be NUL terminated */
+	g_ptr_array_set_size(array, 0);
+	ret = fu_strsplit_full("abc", 1, "\r\n", fu_string_strnsplit_add_cb, array, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_cmpint(array->len, ==, 1);
+	g_assert_cmpstr(g_ptr_array_index(array, 0), ==, "a");
+
+	g_ptr_array_set_size(array, 0);
+	ret = fu_strsplit_full("a\r\n", 2, "\r\n", fu_string_strnsplit_add_cb, array, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_cmpint(array->len, ==, 1);
+	g_assert_cmpstr(g_ptr_array_index(array, 0), ==, "a\r");
 }
 
 static void
@@ -140,6 +155,9 @@ fu_strstrip_func(void)
 		   {"tailing ", "tailing"},
 		   {"  b  ", "b"},
 		   {"  ", ""},
+		   {"\tboth\n", "both"},
+		   {"\n", ""},
+		   {"  \n", ""},
 		   {NULL, NULL}};
 	for (guint i = 0; map[i].old != NULL; i++) {
 		g_autofree gchar *tmp = fu_strstrip(map[i].old);
@@ -243,19 +261,22 @@ fu_strsplit_stream_func(void)
 	/* check includes NUL */
 	g_assert_cmpint(sizeof(str1), ==, 14);
 
-	stream1 = FU_INPUT_STREAM(fu_memory_input_stream_new_from_data(str1, strlen(str1), NULL));
+	stream1 =
+	    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_data(str1, strlen(str1), NULL));
 	ret = fu_strsplit_stream(stream1, 0x0, " ", fu_strsplit_stream_cb, &cnt1, &error);
 	g_assert_no_error(error);
 	g_assert_true(ret);
 	g_assert_cmpint(cnt1, ==, 2);
 
-	stream2 = FU_INPUT_STREAM(fu_memory_input_stream_new_from_data(str2, strlen(str2), NULL));
+	stream2 =
+	    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_data(str2, strlen(str2), NULL));
 	ret = fu_strsplit_stream(stream2, 0x0, "123", fu_strsplit_stream_cb, &cnt2, &error);
 	g_assert_no_error(error);
 	g_assert_true(ret);
 	g_assert_cmpint(cnt2, ==, 6);
 
-	stream3 = FU_INPUT_STREAM(fu_memory_input_stream_new_from_data(str3, sizeof(str3), NULL));
+	stream3 =
+	    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_data(str3, sizeof(str3), NULL));
 	ret = fu_strsplit_stream(stream3, 0x0, "|", fu_strsplit_stream_cb, &cnt3, &error);
 	g_assert_no_error(error);
 	g_assert_true(ret);

@@ -1,4 +1,5 @@
 allow_uefi or subdir_done()
+host_machine.system() == 'linux' or subdir_done()
 
 cargs = ['-DG_LOG_DOMAIN="FuPluginHpBiosCfg"']
 plugins += {
@@ -31,6 +32,7 @@ if get_option('tests')
       fwupd,
       fwupdplugin,
       plugin_builtin_hp_bioscfg,
+      plugin_builtin_linux_fwattr,
     ],
     c_args: [
       cargs,

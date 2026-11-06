@@ -27,6 +27,12 @@ option(
   description: 'build type',
 )
 option(
+  'binder_vintf_stability',
+  type: 'boolean',
+  value: true,
+  description: 'Mark the binder service VINTF-stable',
+)
+option(
   'dbus_socket_address',
   type: 'string',
   value: '',
@@ -75,11 +81,6 @@ option(
   'openssl',
   type: 'feature',
   description: 'OpenSSL support',
-)
-option(
-  'hsi',
-  type: 'feature',
-  description: 'Host Security Information',
 )
 option(
   'introspection',
@@ -209,6 +210,11 @@ option(
   type: 'boolean',
   value: true,
   description: 'enable tests',
+)
+option(
+  'tui',
+  type: 'feature',
+  description: 'Textual terminal user interface support',
 )
 option(
   'umockdev_tests',

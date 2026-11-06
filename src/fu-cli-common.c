@@ -14,7 +14,6 @@
 #include <unistd.h>
 #include <xmlb.h>
 
-#include "fu-bios-settings-private.h"
 #include "fu-cli-common.h"
 #include "fu-console.h"
 
@@ -594,8 +593,8 @@ fu_cli_time_to_str(guint64 tmp)
 
 	/* hours */
 	tmp /= 60;
-	if (tmp < 60) {
-		/* TRANSLATORS: duration in minutes */
+	if (tmp < 24) {
+		/* TRANSLATORS: duration in hours */
 		return g_strdup_printf(ngettext("%u hour", "%u hours", (gint)tmp), (guint)tmp);
 	}
 
@@ -656,8 +655,8 @@ fu_cli_device_flag_to_string(guint64 device_flag)
 		return _("Is in bootloader mode");
 	}
 	if (device_flag == FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG) {
-		/* TRANSLATORS: the hardware is waiting to be replugged */
-		return _("Hardware is waiting to be replugged");
+		/* TRANSLATORS: the hardware is waiting for the user to do something */
+		return _("Device is waiting to be plugged back in");
 	}
 	if (device_flag == FWUPD_DEVICE_FLAG_ANOTHER_WRITE_REQUIRED) {
 		/* skip */
@@ -758,6 +757,10 @@ fu_cli_device_flag_to_string(guint64 device_flag)
 	if (device_flag == FWUPD_DEVICE_FLAG_CAN_EMULATION_TAG) {
 		/* TRANSLATORS: we can save all device enumeration events for emulation */
 		return _("Can tag for emulation");
+	}
+	if (device_flag == FWUPD_DEVICE_FLAG_IS_PROGRAMMER_TARGET) {
+		/* TRANSLATORS: a raw flash chip written using an external programmer */
+		return _("Programmer target");
 	}
 	if (device_flag == FWUPD_DEVICE_FLAG_UNKNOWN)
 		return NULL;
@@ -1436,6 +1439,10 @@ fu_cli_release_flag_to_string(FwupdReleaseFlags release_flag)
 		/* TRANSLATORS: someone we trust has tested this */
 		return _("Tested by trusted vendor");
 	}
+	if (release_flag == FWUPD_RELEASE_FLAG_IS_LOCAL) {
+		/* TRANSLATORS: release came from a local file or directory */
+		return _("Local");
+	}
 
 	/* fall back for unknown types */
 	return fwupd_release_flag_to_string(release_flag);
@@ -1764,45 +1771,81 @@ fu_cli_remote_to_string(FwupdRemote *remote, guint idt)
 	return g_string_free_and_steal(g_steal_pointer(&str));
 }
 
-const gchar *
-fu_cli_request_get_message(FwupdRequest *req)
+gchar *
+fu_cli_request_get_message(FwupdRequest *req, const gchar *device_name)
 {
+	g_autofree gchar *message = NULL;
+
 	if (fwupd_request_has_flag(req, FWUPD_REQUEST_FLAG_ALLOW_GENERIC_MESSAGE)) {
 		if (g_strcmp0(fwupd_request_get_id(req), FWUPD_REQUEST_ID_REMOVE_REPLUG) == 0) {
-			/* TRANSLATORS: warning message shown after update has been scheduled */
-			return _("The update will continue when the device USB cable has been "
-				 "unplugged and then re-inserted.");
+			if (device_name != NULL) {
+				return g_strdup_printf(
+				    /* TRANSLATORS: message text, with %1 as the device name */
+				    _("The update will continue when %s has been "
+				      "unplugged and plugged back in."),
+				    device_name);
+			}
+			/* TRANSLATORS: message text */
+			return g_strdup(_("The update will continue when the device has been "
+					  "unplugged and plugged back in."));
 		}
 		if (g_strcmp0(fwupd_request_get_id(req), FWUPD_REQUEST_ID_REMOVE_USB_CABLE) == 0) {
-			/* TRANSLATORS: warning message shown after update has been scheduled */
-			return _("The update will continue when the device USB cable has been "
-				 "unplugged.");
+			if (device_name != NULL) {
+				/* TRANSLATORS: message text, with %1 as the device name */
+				return g_strdup_printf(_("The update will continue when the USB "
+							 "cable of %s has been unplugged."),
+						       device_name);
+			}
+			/* TRANSLATORS: message text */
+			return g_strdup(_("The update will continue when the device USB cable "
+					  "has been unplugged."));
 		}
 		if (g_strcmp0(fwupd_request_get_id(req), FWUPD_REQUEST_ID_INSERT_USB_CABLE) == 0) {
-			/* TRANSLATORS: warning message shown after update has been scheduled */
-			return _("The update will continue when the device USB cable has been "
-				 "re-inserted.");
+			if (device_name != NULL) {
+				/* TRANSLATORS: message text, with %1 as the device name */
+				return g_strdup_printf(_("The update will continue when the USB "
+							 "cable of %s has been plugged back in."),
+						       device_name);
+			}
+			/* TRANSLATORS: message text */
+			return g_strdup(_("The update will continue when the device USB "
+					  "cable has been plugged back in."));
 		}
 		if (g_strcmp0(fwupd_request_get_id(req), FWUPD_REQUEST_ID_PRESS_UNLOCK) == 0) {
 			/* TRANSLATORS: warning message */
-			return _("Press unlock on the device to continue the update process.");
+			return g_strdup(_("Press unlock on the device to continue the update "
+					  "process."));
 		}
 		if (g_strcmp0(fwupd_request_get_id(req), FWUPD_REQUEST_ID_DO_NOT_POWER_OFF) == 0) {
 			/* TRANSLATORS: warning message shown after update has been scheduled */
-			return _("Do not turn off your computer or remove the AC adaptor "
-				 "while the update is in progress.");
+			return g_strdup(_("Do not turn off your computer or remove the AC adaptor "
+					  "while the update is in progress."));
 		}
 		if (g_strcmp0(fwupd_request_get_id(req), FWUPD_REQUEST_ID_REPLUG_INSTALL) == 0) {
-			/* TRANSLATORS: message shown after device has been marked for emulation */
-			return _("Unplug and replug the device to continue the update process.");
+			if (device_name != NULL) {
+				/* TRANSLATORS: message text, with %1 as the device name */
+				return g_strdup_printf(_("Unplug %s and replug it to continue the "
+							 "update process."),
+						       device_name);
+			}
+			/* TRANSLATORS: message text */
+			return g_strdup(_("Unplug the device and replug it to continue the "
+					  "update process."));
 		}
 		if (g_strcmp0(fwupd_request_get_id(req), FWUPD_REQUEST_ID_REPLUG_POWER) == 0) {
-			/* TRANSLATORS: warning message */
-			return _("The update will continue when the device power cable has been "
-				 "removed and re-inserted.");
+			if (device_name != NULL) {
+				/* TRANSLATORS: message text, with %1 as the device name */
+				return g_strdup_printf(_("The update will continue when the power "
+							 "cable of %s has been removed and "
+							 "plugged back in."),
+						       device_name);
+			}
+			/* TRANSLATORS: message text */
+			return g_strdup(_("The update will continue when the device power cable "
+					  "has been removed and plugged back in."));
 		}
 	}
-	return fwupd_request_get_message(req);
+	return g_strdup(fwupd_request_get_message(req));
 }
 
 static const gchar *
@@ -2065,11 +2108,22 @@ fu_cli_security_event_to_string(FuSecurityAttr *attr)
 		      /* TRANSLATORS: HSI event title */
 		      _("UEFI NX bootloader protection is now disabled")},
 		     /* ------------------------------------------*/
-		     {FWUPD_SECURITY_ATTR_ID_UEFI_DB,
+		     {FWUPD_SECURITY_ATTR_ID_UEFI_DB_MS_UEFI,
 		      FWUPD_SECURITY_ATTR_RESULT_NOT_VALID,
 		      FWUPD_SECURITY_ATTR_RESULT_VALID,
 		      /* TRANSLATORS: HSI event title */
 		      _("The UEFI certificate store is now up to date")},
+		     /* ------------------------------------------*/
+		     {FWUPD_SECURITY_ATTR_ID_UEFI_DB_PRODUCTION,
+		      FWUPD_SECURITY_ATTR_RESULT_NOT_VALID,
+		      FWUPD_SECURITY_ATTR_RESULT_VALID,
+		      /* TRANSLATORS: HSI event title */
+		      _("The UEFI certificate store no longer contains a test key")},
+		     {FWUPD_SECURITY_ATTR_ID_UEFI_DB_PRODUCTION,
+		      FWUPD_SECURITY_ATTR_RESULT_VALID,
+		      FWUPD_SECURITY_ATTR_RESULT_NOT_VALID,
+		      /* TRANSLATORS: HSI event title */
+		      _("The UEFI certificate store now contains a test key")},
 		     {FWUPD_SECURITY_ATTR_ID_HP_SURESTART,
 		      FWUPD_SECURITY_ATTR_RESULT_NOT_ENABLED,
 		      FWUPD_SECURITY_ATTR_RESULT_ENABLED,

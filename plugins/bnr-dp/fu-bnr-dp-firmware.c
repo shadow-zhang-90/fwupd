@@ -439,6 +439,8 @@ fu_bnr_dp_firmware_patch_boot_counter(FuBnrDpFirmware *self,
 	}
 
 	image = fu_firmware_get_bytes(FU_FIRMWARE(self), error);
+	if (image == NULL)
+		return FALSE;
 	st_header = fu_struct_bnr_dp_payload_header_parse(g_bytes_get_data(image, NULL),
 							  g_bytes_get_size(image),
 							  FU_BNR_DP_FIRMWARE_HEADER_OFFSET,
@@ -541,7 +543,7 @@ fu_bnr_dp_firmware_check(FuBnrDpFirmware *self,
 			    FWUPD_ERROR,
 			    FWUPD_ERROR_NOT_SUPPORTED,
 			    "firmware file is not for a compatible device (expected id: 0x%X, "
-			    "received id: 0x%" G_GUINT64_FORMAT "X)",
+			    "received id: 0x%" G_GINT64_MODIFIER "X)",
 			    product_num,
 			    self->device_id);
 		return FALSE;
@@ -554,7 +556,7 @@ fu_bnr_dp_firmware_check(FuBnrDpFirmware *self,
 			    FWUPD_ERROR,
 			    FWUPD_ERROR_NOT_SUPPORTED,
 			    "firmware file is not for a compatible variant (expected: 0x%X, "
-			    "received: 0x%" G_GUINT64_FORMAT "X)",
+			    "received: 0x%" G_GINT64_MODIFIER "X)",
 			    compat_id,
 			    self->variant);
 		return FALSE;

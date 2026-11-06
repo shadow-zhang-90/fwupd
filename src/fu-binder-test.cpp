@@ -12,6 +12,22 @@
 #include "fu-test.h"
 
 static void
+fu_binder_remote_missing_func(void)
+{
+	aidl_fwupd::FwupdRemote r;
+	g_autoptr(FwupdRemote) remote = fwupd_remote_new();
+	g_autoptr(FwupdRemote) remote2 = NULL;
+	g_autoptr(GError) error = NULL;
+
+	fwupd_remote_set_mtime(remote, G_MAXUINT64);
+	r = fu_binder_remote_to_aidl(remote);
+	remote2 = fu_binder_remote_from_aidl(r, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(remote2);
+	g_assert_cmpint(fwupd_remote_get_mtime(remote2), ==, G_MAXUINT64);
+}
+
+static void
 fu_binder_remote_func(void)
 {
 	aidl_fwupd::FwupdRemote r;
@@ -293,13 +309,271 @@ fu_binder_request_func(void)
 	g_assert_true(fwupd_request_has_flag(request2, FWUPD_REQUEST_FLAG_ALLOW_GENERIC_MESSAGE));
 }
 
+static void
+fu_binder_plugin_func(void)
+{
+	aidl_fwupd::FwupdPlugin p;
+	g_autoptr(FwupdPlugin) plugin = fwupd_plugin_new();
+	g_autoptr(FwupdPlugin) plugin2 = NULL;
+	g_autoptr(GError) error = NULL;
+
+	fwupd_plugin_set_name(plugin, "test");
+	fwupd_plugin_add_flag(plugin, FWUPD_PLUGIN_FLAG_USER_WARNING);
+	fwupd_plugin_add_flag(plugin, FWUPD_PLUGIN_FLAG_CLEAR_UPDATABLE);
+
+	p = fu_binder_plugin_to_aidl(plugin);
+	plugin2 = fu_binder_plugin_from_aidl(p, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(plugin2);
+
+	g_assert_cmpstr(fwupd_plugin_get_name(plugin2), ==, "test");
+	g_assert_true(fwupd_plugin_has_flag(plugin2, FWUPD_PLUGIN_FLAG_USER_WARNING));
+	g_assert_true(fwupd_plugin_has_flag(plugin2, FWUPD_PLUGIN_FLAG_CLEAR_UPDATABLE));
+	g_assert_false(fwupd_plugin_has_flag(plugin2, FWUPD_PLUGIN_FLAG_NO_HARDWARE));
+}
+
+static void
+fu_binder_bios_setting_func(void)
+{
+	aidl_fwupd::FwupdBiosSetting b;
+	g_autoptr(FwupdBiosSetting) setting = fwupd_bios_setting_new("name", "/path");
+	g_autoptr(FwupdBiosSetting) setting2 = NULL;
+	g_autoptr(GError) error = NULL;
+
+	fwupd_bios_setting_set_id(setting, "com.fwupd.setting");
+	fwupd_bios_setting_set_description(setting, "description");
+	fwupd_bios_setting_set_current_value(setting, "enabled");
+	fwupd_bios_setting_add_possible_value(setting, "enabled");
+	fwupd_bios_setting_add_possible_value(setting, "disabled");
+	fwupd_bios_setting_set_kind(setting, FWUPD_BIOS_SETTING_KIND_ENUMERATION);
+	fwupd_bios_setting_set_read_only(setting, TRUE);
+	fwupd_bios_setting_set_lower_bound(setting, 1);
+	fwupd_bios_setting_set_upper_bound(setting, 16);
+	fwupd_bios_setting_set_scalar_increment(setting, 2);
+
+	b = fu_binder_bios_setting_to_aidl(setting);
+	setting2 = fu_binder_bios_setting_from_aidl(b, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(setting2);
+
+	g_assert_cmpstr(fwupd_bios_setting_get_id(setting2), ==, "com.fwupd.setting");
+	g_assert_cmpstr(fwupd_bios_setting_get_name(setting2), ==, "name");
+	g_assert_cmpstr(fwupd_bios_setting_get_path(setting2), ==, "/path");
+	g_assert_cmpstr(fwupd_bios_setting_get_description(setting2), ==, "description");
+	g_assert_cmpstr(fwupd_bios_setting_get_current_value(setting2), ==, "enabled");
+	g_assert_cmpint(fwupd_bios_setting_get_possible_values(setting2)->len, ==, 2);
+	g_assert_cmpint(fwupd_bios_setting_get_kind(setting2),
+			==,
+			FWUPD_BIOS_SETTING_KIND_ENUMERATION);
+	g_assert_true(fwupd_bios_setting_get_read_only(setting2));
+	g_assert_cmpint(fwupd_bios_setting_get_lower_bound(setting2), ==, 1);
+	g_assert_cmpint(fwupd_bios_setting_get_upper_bound(setting2), ==, 16);
+	g_assert_cmpint(fwupd_bios_setting_get_scalar_increment(setting2), ==, 2);
+}
+
+static void
+fu_binder_security_attr_func(void)
+{
+	aidl_fwupd::FwupdSecurityAttr a;
+	g_autoptr(FwupdSecurityAttr) attr =
+	    fwupd_security_attr_new("org.fwupd.hsi.Uefi.SecureBoot");
+	g_autoptr(FwupdSecurityAttr) attr2 = NULL;
+	g_autoptr(GError) error = NULL;
+
+	fwupd_security_attr_set_name(attr, "name");
+	fwupd_security_attr_set_title(attr, "UEFI Secure Boot");
+	fwupd_security_attr_set_description(attr, "description");
+	fwupd_security_attr_set_plugin(attr, "uefi");
+	fwupd_security_attr_set_url(attr, "https://fwupd.github.io/hsi.html");
+	fwupd_security_attr_set_fwupd_version(attr, "2.0.0");
+	fwupd_security_attr_set_bios_setting_id(attr, "com.fwupd.setting");
+	fwupd_security_attr_set_bios_setting_current_value(attr, "disabled");
+	fwupd_security_attr_set_bios_setting_target_value(attr, "enabled");
+	fwupd_security_attr_set_kernel_current_value(attr, "0");
+	fwupd_security_attr_set_kernel_target_value(attr, "1");
+	fwupd_security_attr_add_guid(attr, "2082b5e0-7a64-478a-b1b2-e3404fab6dad");
+	fwupd_security_attr_add_obsolete(attr, "org.fwupd.hsi.Old");
+	fwupd_security_attr_set_level(attr, FWUPD_SECURITY_ATTR_LEVEL_IMPORTANT);
+	fwupd_security_attr_set_result(attr, FWUPD_SECURITY_ATTR_RESULT_ENABLED);
+	fwupd_security_attr_set_result_fallback(attr, FWUPD_SECURITY_ATTR_RESULT_NOT_ENABLED);
+	fwupd_security_attr_set_result_success(attr, FWUPD_SECURITY_ATTR_RESULT_ENABLED);
+	fwupd_security_attr_set_flags(attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS);
+	fwupd_security_attr_set_created(attr, 0x1234);
+
+	a = fu_binder_security_attr_to_aidl(attr);
+	attr2 = fu_binder_security_attr_from_aidl(a, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(attr2);
+
+	g_assert_cmpstr(fwupd_security_attr_get_appstream_id(attr2),
+			==,
+			"org.fwupd.hsi.Uefi.SecureBoot");
+	g_assert_cmpstr(fwupd_security_attr_get_name(attr2), ==, "name");
+	g_assert_cmpstr(fwupd_security_attr_get_title(attr2), ==, "UEFI Secure Boot");
+	g_assert_cmpstr(fwupd_security_attr_get_description(attr2), ==, "description");
+	g_assert_cmpstr(fwupd_security_attr_get_plugin(attr2), ==, "uefi");
+	g_assert_cmpstr(fwupd_security_attr_get_url(attr2), ==, "https://fwupd.github.io/hsi.html");
+	g_assert_cmpstr(fwupd_security_attr_get_fwupd_version(attr2), ==, "2.0.0");
+	g_assert_cmpstr(fwupd_security_attr_get_bios_setting_id(attr2), ==, "com.fwupd.setting");
+	g_assert_cmpstr(fwupd_security_attr_get_bios_setting_current_value(attr2), ==, "disabled");
+	g_assert_cmpstr(fwupd_security_attr_get_bios_setting_target_value(attr2), ==, "enabled");
+	g_assert_cmpstr(fwupd_security_attr_get_kernel_current_value(attr2), ==, "0");
+	g_assert_cmpstr(fwupd_security_attr_get_kernel_target_value(attr2), ==, "1");
+	g_assert_cmpint(fwupd_security_attr_get_guids(attr2)->len, ==, 1);
+	g_assert_cmpint(fwupd_security_attr_get_obsoletes(attr2)->len, ==, 1);
+	g_assert_cmpint(fwupd_security_attr_get_level(attr2),
+			==,
+			FWUPD_SECURITY_ATTR_LEVEL_IMPORTANT);
+	g_assert_cmpint(fwupd_security_attr_get_result(attr2),
+			==,
+			FWUPD_SECURITY_ATTR_RESULT_ENABLED);
+	g_assert_cmpint(fwupd_security_attr_get_result_fallback(attr2),
+			==,
+			FWUPD_SECURITY_ATTR_RESULT_NOT_ENABLED);
+	g_assert_cmpint(fwupd_security_attr_get_result_success(attr2),
+			==,
+			FWUPD_SECURITY_ATTR_RESULT_ENABLED);
+	g_assert_true(fwupd_security_attr_has_flag(attr2, FWUPD_SECURITY_ATTR_FLAG_SUCCESS));
+	g_assert_cmpint(fwupd_security_attr_get_created(attr2), ==, 0x1234);
+}
+
+static void
+fu_binder_remote_error_func(void)
+{
+	/* apply @mutate to an otherwise-valid default struct and return TRUE if the
+	 * conversion correctly rejected the untrusted input */
+	auto rejected = [](auto mutate) -> gboolean {
+		aidl_fwupd::FwupdRemote r;
+		g_autoptr(GError) error = NULL;
+		mutate(r);
+		if (fu_binder_remote_from_aidl(r, &error) != NULL)
+			return FALSE;
+		return g_error_matches(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_DATA);
+	};
+	g_assert_true(rejected([](aidl_fwupd::FwupdRemote &r) { r.kind = -1; }));
+	g_assert_true(
+	    rejected([](aidl_fwupd::FwupdRemote &r) { r.kind = FWUPD_REMOTE_KIND_LAST; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdRemote &r) { r.mtime = -2; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdRemote &r) { r.refreshIntervalSec = -1; }));
+}
+
+static void
+fu_binder_release_error_func(void)
+{
+	auto rejected = [](auto mutate) -> gboolean {
+		aidl_fwupd::FwupdRelease r;
+		g_autoptr(GError) error = NULL;
+		mutate(r);
+		if (fu_binder_release_from_aidl(r, &error) != NULL)
+			return FALSE;
+		return g_error_matches(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_DATA);
+	};
+	g_assert_true(rejected([](aidl_fwupd::FwupdRelease &r) { r.size = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdRelease &r) { r.created = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdRelease &r) { r.urgency = -1; }));
+	g_assert_true(
+	    rejected([](aidl_fwupd::FwupdRelease &r) { r.urgency = FWUPD_RELEASE_URGENCY_LAST; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdRelease &r) { r.installDuration = -1; }));
+}
+
+static void
+fu_binder_device_error_func(void)
+{
+	auto rejected = [](auto mutate) -> gboolean {
+		aidl_fwupd::FwupdDevice d;
+		g_autoptr(GError) error = NULL;
+		mutate(d);
+		if (fu_binder_device_from_aidl(d, &error) != NULL)
+			return FALSE;
+		return g_error_matches(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_DATA);
+	};
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.versionFormat = -1; }));
+	g_assert_true(rejected(
+	    [](aidl_fwupd::FwupdDevice &d) { d.versionFormat = FWUPD_VERSION_FORMAT_LAST; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.flashesLeft = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.batteryLevel = -1; }));
+	g_assert_true(rejected(
+	    [](aidl_fwupd::FwupdDevice &d) { d.batteryLevel = FWUPD_BATTERY_LEVEL_INVALID + 1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.batteryThreshold = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) {
+		d.batteryThreshold = FWUPD_BATTERY_LEVEL_INVALID + 1;
+	}));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.versionRaw = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.versionLowestRaw = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.versionHighestRaw = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.versionBootloaderRaw = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.versionBuildDate = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.installDuration = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.created = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.modified = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.updateState = -1; }));
+	g_assert_true(
+	    rejected([](aidl_fwupd::FwupdDevice &d) { d.updateState = FWUPD_UPDATE_STATE_LAST; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.percentage = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.percentage = 101; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.status = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) { d.status = FWUPD_STATUS_LAST; }));
+
+	/* an invalid nested release makes the whole device invalid */
+	g_assert_true(rejected([](aidl_fwupd::FwupdDevice &d) {
+		aidl_fwupd::FwupdRelease rel;
+		rel.urgency = -1;
+		d.releases = std::vector<std::optional<aidl_fwupd::FwupdRelease>>{rel};
+	}));
+}
+
+static void
+fu_binder_request_error_func(void)
+{
+	auto rejected = [](auto mutate) -> gboolean {
+		aidl_fwupd::FwupdRequest r;
+		g_autoptr(GError) error = NULL;
+		mutate(r);
+		if (fu_binder_request_from_aidl(r, &error) != NULL)
+			return FALSE;
+		return g_error_matches(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_DATA);
+	};
+	g_assert_true(rejected([](aidl_fwupd::FwupdRequest &r) { r.kind = -1; }));
+	g_assert_true(
+	    rejected([](aidl_fwupd::FwupdRequest &r) { r.kind = FWUPD_REQUEST_KIND_LAST; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdRequest &r) { r.created = -1; }));
+}
+
+static void
+fu_binder_bios_setting_error_func(void)
+{
+	auto rejected = [](auto mutate) -> gboolean {
+		aidl_fwupd::FwupdBiosSetting b;
+		g_autoptr(GError) error = NULL;
+		mutate(b);
+		if (fu_binder_bios_setting_from_aidl(b, &error) != NULL)
+			return FALSE;
+		return g_error_matches(error, FWUPD_ERROR, FWUPD_ERROR_INVALID_DATA);
+	};
+	/* possibleValues is required, so leave it unset */
+	g_assert_true(rejected([](aidl_fwupd::FwupdBiosSetting &) {}));
+	/* these are unsigned in fwupd, so a negative AIDL value is rejected */
+	g_assert_true(rejected([](aidl_fwupd::FwupdBiosSetting &b) { b.lowerBound = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdBiosSetting &b) { b.upperBound = -1; }));
+	g_assert_true(rejected([](aidl_fwupd::FwupdBiosSetting &b) { b.scalarIncrement = -1; }));
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 	g_test_add_func("/fwupd/binder/remote", fu_binder_remote_func);
+	g_test_add_func("/fwupd/binder/remote/missing", fu_binder_remote_missing_func);
+	g_test_add_func("/fwupd/binder/remote/error", fu_binder_remote_error_func);
 	g_test_add_func("/fwupd/binder/release", fu_binder_release_func);
+	g_test_add_func("/fwupd/binder/release/error", fu_binder_release_error_func);
 	g_test_add_func("/fwupd/binder/device", fu_binder_device_func);
+	g_test_add_func("/fwupd/binder/device/error", fu_binder_device_error_func);
 	g_test_add_func("/fwupd/binder/request", fu_binder_request_func);
+	g_test_add_func("/fwupd/binder/request/error", fu_binder_request_error_func);
+	g_test_add_func("/fwupd/binder/plugin", fu_binder_plugin_func);
+	g_test_add_func("/fwupd/binder/bios-setting", fu_binder_bios_setting_func);
+	g_test_add_func("/fwupd/binder/bios-setting/error", fu_binder_bios_setting_error_func);
+	g_test_add_func("/fwupd/binder/security-attr", fu_binder_security_attr_func);
 	return g_test_run();
 }

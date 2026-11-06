@@ -1,4 +1,4 @@
-min_glib_version = "2.68"
+min_glib_version = "2.80"
 format = "text"
 editor_url = "vscode://file{path}:{line}:{column}"
 
@@ -39,4 +39,7 @@ level = "error"
 level = "ignore"
 
 [rules.use_auto_cleanup]
+level = "ignore"
+
+[rules.matching_declare_define]
 level = "ignore"

@@ -6,11 +6,12 @@
 #
 # pylint: disable=invalid-name,missing-docstring,consider-using-f-string
 
-import os
-import datetime
 import argparse
+import datetime
 import glob
+import os
 import sys
+
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 subst = {}
@@ -43,7 +44,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--parent", type=str, default="Usb", help="Device parent GType")
     parser.add_argument(
-        "--year", type=int, default=datetime.date.today().year, help="Copyright year"
+        "--year",
+        type=int,
+        default=datetime.datetime.now(tz=datetime.UTC).date().year,
+        help="Copyright year",
     )
     parser.add_argument("--author", type=str, help="Copyright author", required=True)
     parser.add_argument("--email", type=str, help="Copyright email", required=True)

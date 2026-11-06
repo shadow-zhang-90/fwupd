@@ -9,13 +9,12 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
-import tempfile
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
-import re
-
 from pathlib import Path
 
 FWUPD_QUBES_DIR = "/usr/share/qubes-fwupd"
@@ -27,10 +26,10 @@ else:
     sys.path.append("./src")
 
 try:
-    from qubes_fwupd_heads import FwupdHeads
-    from qubes_fwupd_update import FwupdUpdate, run_in_tty
     from fwupd_receive_updates import FwupdReceiveUpdates
     from qubes_fwupd_common import EXIT_CODES, create_dirs
+    from qubes_fwupd_heads import FwupdHeads
+    from qubes_fwupd_update import FwupdUpdate
 except ModuleNotFoundError:
     raise ModuleNotFoundError(
         "qubes-fwupd modules not found.  You may need to reinstall package."
@@ -96,7 +95,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         metadata_url -- Download metadata from the custom url
         """
         if not metadata_url:
-            raise Exception("missing metadata URL")
+            raise ValueError("missing metadata URL")
         self.download_metadata(whonix=whonix, metadata_url=metadata_url)
         self.handle_metadata_update(
             self.updatevm,
@@ -154,7 +153,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
             if remote_name:
                 metadata_url = self.get_remotes()[remote_name]
             else:
-                raise Exception("missing metadata URL")
+                raise ValueError("missing metadata URL")
         metadata_name = os.path.basename(metadata_url)
         self.metadata_file = os.path.join(FWUPD_DOM0_METADATA_DIR, metadata_name)
         self.metadata_file_jcat = self.metadata_file + ".jcat"
@@ -179,9 +178,9 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         output = p.communicate()[0].decode()
         print(output)
         if p.returncode != 0:
-            raise Exception("fwupd-qubes: Refresh failed")
+            raise RuntimeError("fwupd-qubes: Refresh failed")
         if "Successfully refreshed metadata manually" not in output:
-            raise Exception(
+            raise RuntimeError(
                 f"Manual metadata refresh failed: {output.strip() or '(no output)'}"
             )
 
@@ -199,7 +198,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
                     metadata_url=url,
                     ignore_postquantum=ignore_postquantum,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - catch-all to continue refreshing other remotes
                 print(f"Failed to refresh remote '{name}': {e}")
 
     def _get_dom0_updates(self, allow_older=False, allow_reinstall=False):
@@ -213,7 +212,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         p = subprocess.Popen(cmd_get_dom0_updates, stdout=subprocess.PIPE)
         self.dom0_updates_info = p.communicate()[0].decode()
         if p.returncode != 0 and p.returncode != 2:
-            raise Exception("fwupd-qubes: Getting available updates failed")
+            raise RuntimeError("fwupd-qubes: Getting available updates failed")
 
     def _parse_dom0_updates_info(self, updates_info):
         """Creates dictionary and list with information about updates.
@@ -295,7 +294,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
                     for i, fw_dngd in enumerate(releases):
                         print(decorator)
                         print(
-                            f"  {i+1}. Firmware downgrade version:"
+                            f"  {i + 1}. Firmware downgrade version:"
                             f"\t {fw_dngd['Version']}"
                         )
                         description = fw_dngd["Description"].replace("<p>", "")
@@ -339,11 +338,11 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         p = subprocess.run(
             [FWUPDTOOL, "vercmp", version_a, version_b]
             + ([] if version_format in (None, "unknown") else [version_format]),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
+            check=False,
         )
         if p.returncode != 0:
-            raise Exception(
+            raise RuntimeError(
                 f"fwupd-qubes: Comparing {version_a!r} with {version_b!r} failed: {p.stderr.decode(errors='replace').strip()}"
             )
         # fwupdtool outputs "VERSION1 <op> VERSION2"
@@ -354,7 +353,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
             )
             if match:
                 return {"<": -1, "==": 0, ">": 1}[match.group(1)]
-        raise Exception(
+        raise RuntimeError(
             f"fwupd-qubes: invalid `fwupdtool vercmp` output: {output.strip()!r}"
         )
 
@@ -389,7 +388,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         p = subprocess.Popen(cmd_dmidecode, stdout=subprocess.PIPE)
         p.wait()
         if p.returncode != 0:
-            raise Exception("dmidecode: Reading DMI failed")
+            raise RuntimeError("dmidecode: Reading DMI failed")
         return p.communicate()[0].decode()
 
     def _verify_dmi(self, arch_path, version, downgrade=False, version_format=None):
@@ -407,7 +406,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
             p = subprocess.Popen(cmd_extract, stdout=subprocess.PIPE)
             p.communicate()
             if p.returncode != 0:
-                raise Exception(f"gcab: Error while extracting {arch_path}.")
+                raise RuntimeError(f"gcab: Error while extracting {arch_path}.")
             path_metainfo = os.path.join(tmpdir, "firmware.metainfo.xml")
             tree = ET.parse(path_metainfo)
         root = tree.getroot()
@@ -428,7 +427,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         p = subprocess.Popen(cmd_get_dom0_devices, stdout=subprocess.PIPE)
         self.dom0_devices_info = p.communicate()[0].decode()
         if p.returncode != 0:
-            raise Exception("fwupd-qubes: Getting devices info failed")
+            raise RuntimeError("fwupd-qubes: Getting devices info failed")
 
     def update_firmware(
         self, whonix=False, allow_older=False, allow_reinstall=False, force=False
@@ -449,7 +448,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         updates_list = self.dom0_updates_list
         ret_input = self._user_input(updates_list)
         if ret_input == -EXIT_CODES["NOTHING_TO_DO"]:
-            exit(EXIT_CODES["NOTHING_TO_DO"])
+            sys.exit(EXIT_CODES["NOTHING_TO_DO"])
         choice = ret_input
         self._parse_parameters(updates_list, choice)
         self._download_firmware_updates(self.url, self.sha, whonix=whonix)
@@ -514,7 +513,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         p = subprocess.Popen(cmd_install)
         p.wait()
         if p.returncode != 0:
-            raise Exception("fwupd-qubes: Firmware downgrade failed")
+            raise RuntimeError("fwupd-qubes: Firmware downgrade failed")
 
     def _install_dom0_firmware(
         self, arch_path, allow_older=False, allow_reinstall=False, force=False
@@ -538,7 +537,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         p = subprocess.Popen(cmd_install)
         p.wait()
         if p.returncode != 0:
-            raise Exception(
+            raise RuntimeError(
                 f"fwupd-qubes: Firmware install failed (fwupdmgr exit {p.returncode})"
             )
 
@@ -562,7 +561,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
                 target_device = device
                 break
         if target_device is None:
-            raise Exception(f"Device '{device_id}' not found")
+            raise KeyError(f"Device '{device_id}' not found")
 
         current = target_device.get("Version", "0")
         releases = target_device.get("Releases", [])
@@ -574,7 +573,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
             )
         if not releases:
             detail = f"\n  fwupdmgr: {stderr}" if stderr else ""
-            raise Exception(
+            raise RuntimeError(
                 f"No releases available for device '{device_id}'.{detail}\n"
                 "  Try: sudo qubes-fwupdmgr refresh"
             )
@@ -582,12 +581,12 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         if version is not None:
             match = next((r for r in releases if r.get("Version") == version), None)
             if match is None:
-                raise Exception(
+                raise KeyError(
                     f"Version '{version}' not found for device '{device_id}'"
                 )
             uri = self._release_uri(match)
             if not uri:
-                raise Exception(
+                raise RuntimeError(
                     f"Release '{version}' for device '{device_id}' has no download URL"
                 )
             return uri, match["Checksum"][-1]
@@ -602,7 +601,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
             )
         ]
         if not candidates:
-            raise Exception(f"No eligible release found for device '{device_id}'")
+            raise RuntimeError(f"No eligible release found for device '{device_id}'")
         best = candidates[0]
         for candidate in candidates[1:]:
             if (
@@ -614,7 +613,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
                 best = candidate
         uri = self._release_uri(best)
         if not uri:
-            raise Exception(
+            raise RuntimeError(
                 f"Best release for device '{device_id}' has no download URL"
             )
         return uri, best["Checksum"][-1]
@@ -650,7 +649,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
                 allow_reinstall=allow_reinstall,
             )
         elif not (url and sha):
-            raise Exception("install requires a device UUID or --url and --sha")
+            raise ValueError("install requires a device UUID or --url and --sha")
         self._download_firmware_updates(url, sha, whonix=whonix)
         self._install_dom0_firmware(
             self.arch_path,
@@ -669,7 +668,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         dom0_downgrades = self._parse_downgrades(self.dom0_devices_info)
         ret_input = self._user_input(dom0_downgrades, downgrade=True)
         if ret_input == -EXIT_CODES["NOTHING_TO_DO"]:
-            exit(EXIT_CODES["NOTHING_TO_DO"])
+            sys.exit(EXIT_CODES["NOTHING_TO_DO"])
         device_choice, downgrade_choice = ret_input
         downgrade = dom0_downgrades[device_choice]
         releases = downgrade["Releases"]
@@ -755,11 +754,11 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
                     print("Available updates:")
                     print(decorator)
                 print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
-                print(f"{i+1+prefix}. Device: {device['Name']}")
+                print(f"{i + 1 + prefix}. Device: {device['Name']}")
                 print(f"   Current firmware version:\t {device['Version']}")
                 for update in device["Releases"]:
                     print(decorator)
-                    print("   Firmware update " f"version:\t {update['Version']}")
+                    print(f"   Firmware update version:\t {update['Version']}")
                     print(f"   URL:\t {update['Url']}")
                     print(f"   SHA256 checksum:\t {update['Checksum']}")
                     description = update["Description"].replace("<p>", "")
@@ -863,7 +862,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
         self._download_firmware_updates(self.heads_update_url, self.heads_update_sha)
         return_code = self._copy_heads_firmware(self.arch_path)
         if return_code == EXIT_CODES["NOTHING_TO_DO"]:
-            exit(EXIT_CODES["NOTHING_TO_DO"])
+            sys.exit(EXIT_CODES["NOTHING_TO_DO"])
         elif return_code == EXIT_CODES["SUCCESS"]:
             print()
             while True:
@@ -880,7 +879,7 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
                 except ValueError:
                     print("Invalid choice.")
         else:
-            raise Exception("Copying heads update failed!!")
+            raise RuntimeError("Copying heads update failed!!")
 
     def validate_dom0_dirs(self):
         """Validates and creates directories"""
@@ -971,15 +970,13 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
             return False
         try:
             rc = self._compare_versions(rel_ver_str, cur_ver_str or "0", version_format)
-        except Exception:
+        except Exception:  # noqa: BLE001 - _compare_versions raises generic Exception
             return False
         if rc > 0:
             return True
         if rc == 0 and allow_reinstall:
             return True
-        if rc < 0 and allow_older:
-            return True
-        return False
+        return bool(rc < 0 and allow_older)
 
     def _fwupd_get_releases(self, device_id, allow_older=False, allow_reinstall=False):
         """Run `fwupdmgr --json get-releases <id>` and return its Releases list.
@@ -994,8 +991,8 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
             cmd.append("--allow-reinstall")
         cmd += ["get-releases", "--", device_id]
         try:
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except Exception as e:
+            result = subprocess.run(cmd, capture_output=True, check=False)
+        except OSError as e:
             return [], str(e)
         try:
             releases = json.loads(result.stdout.decode(errors="replace")).get(
@@ -1010,13 +1007,13 @@ class QubesFwupdmgr(FwupdHeads, FwupdUpdate, FwupdReceiveUpdates):
 def main():
     if os.geteuid() != 0:
         print("You need to have root privileges to run this script.\n")
-        exit(EXIT_CODES["ERROR"])
+        sys.exit(EXIT_CODES["ERROR"])
 
     q = QubesFwupdmgr()
 
     if len(sys.argv) < 2:
         q.help()
-        exit(1)
+        sys.exit(1)
 
     metadata_url = None
     device_override = None
@@ -1036,7 +1033,7 @@ def main():
                     " Vendor Firmware Service (https://fwupd.org/)"
                 )
                 print("Exiting...")
-                exit(1)
+                sys.exit(1)
         if "--sha=" in arg:
             firmware_sha = arg.replace("--sha=", "")
         if "--device=" in arg:
@@ -1087,12 +1084,12 @@ def main():
         install_version = install_pos[1] if len(install_pos) > 1 else None
         if install_device_id and metadata_url:
             print("install: use either DEVICE-UUID or --url, not both")
-            exit(EXIT_CODES["ERROR"])
+            sys.exit(EXIT_CODES["ERROR"])
         if not install_device_id and not (metadata_url and firmware_sha):
             print(
                 "install requires DEVICE-UUID [VERSION] or --url=<URL> --sha=<SHA256>"
             )
-            exit(EXIT_CODES["ERROR"])
+            sys.exit(EXIT_CODES["ERROR"])
         q.install_firmware(
             device_id=install_device_id,
             version=install_version,
@@ -1123,7 +1120,7 @@ def main():
         )
     else:
         q.help()
-        exit(1)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

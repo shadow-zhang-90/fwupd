@@ -11,6 +11,7 @@
 #include "fu-efivars-private.h"
 #include "fu-plugin-private.h"
 #include "fu-uefi-bgrt.h"
+#include "fu-uefi-bootmgr.h"
 #include "fu-uefi-capsule-backend.h"
 #include "fu-uefi-capsule-plugin.h"
 #include "fu-uefi-cod-device.h"
@@ -30,7 +31,8 @@ fu_uefi_update_esp_valid_func(void)
 	g_autoptr(GBytes) blob = g_bytes_new_static((const guint8 *)"BOB", 3);
 	g_autoptr(GBytes) blob_padded = fu_bytes_pad(blob, 4 * FU_MB, 0xFF);
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = fu_memory_input_stream_new_from_bytes(blob_padded);
+	g_autoptr(FuInputStream) stream =
+	    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(blob_padded));
 
 	/* enough to fit the firmware */
 	fu_volume_set_filesystem_free(volume_esp, 10 * FU_MB);
@@ -57,7 +59,8 @@ fu_uefi_update_esp_invalid_func(void)
 	g_autoptr(GBytes) blob = g_bytes_new_static((const guint8 *)"BOB", 3);
 	g_autoptr(GBytes) blob_padded = fu_bytes_pad(blob, 4 * FU_MB, 0xFF);
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = fu_memory_input_stream_new_from_bytes(blob_padded);
+	g_autoptr(FuInputStream) stream =
+	    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(blob_padded));
 
 	/* enough to fit the firmware */
 	fu_volume_set_filesystem_free(volume_esp, FU_MB);
@@ -84,7 +87,8 @@ fu_uefi_update_esp_no_backup_func(void)
 	g_autoptr(GBytes) blob = g_bytes_new_static((const guint8 *)"BOB", 3);
 	g_autoptr(GBytes) blob_padded = fu_bytes_pad(blob, 4 * FU_MB, 0xFF);
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = fu_memory_input_stream_new_from_bytes(blob_padded);
+	g_autoptr(FuInputStream) stream =
+	    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(blob_padded));
 
 	/* enough to fit the firmware */
 	fu_volume_set_filesystem_free(volume_esp, 6 * FU_MB);
@@ -153,14 +157,14 @@ fu_uefi_bitmap_func(void)
 	g_autofree gchar *fn = NULL;
 	g_autoptr(FuBitmapImage) bmp_image = fu_bitmap_image_new();
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 
 	fn = g_test_build_filename(G_TEST_DIST, "tests", "test.bmp", NULL);
-	stream = fu_input_stream_from_path(fn, &error);
+	stream = fwupd_file_input_stream_new(fn, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
 	ret = fu_firmware_parse_stream(FU_FIRMWARE(bmp_image),
-				       stream,
+				       FWUPD_INPUT_STREAM(stream),
 				       0x0,
 				       FU_FIRMWARE_PARSE_FLAG_NONE,
 				       &error);
@@ -274,6 +278,63 @@ fu_uefi_cod_device_func(void)
 	g_assert_cmpint(fu_uefi_capsule_device_get_status(FU_UEFI_CAPSULE_DEVICE(dev)),
 			==,
 			FU_UEFI_CAPSULE_DEVICE_STATUS_ERROR_AUTH_ERROR);
+}
+
+static void
+fu_uefi_cod_device_hex_idx_func(void)
+{
+	/* the firmware writes the capsule index in hexadecimal, so CapsuleLast
+	 * can be e.g. "Capsule000A" -- which is index 10 and not a parse error */
+	const gchar *idxs[] = {"Capsule0009", "Capsule000A", "Capsule000F", "Capsule0010", NULL};
+
+	for (guint i = 0; idxs[i] != NULL; i++) {
+		gboolean ret;
+		g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_DUMMY_EFIVARS);
+		g_autoptr(FuDevice) dev = NULL;
+		g_autoptr(GBytes) cap = NULL;
+		g_autoptr(GBytes) last = NULL;
+		g_autoptr(GError) error = NULL;
+		FuEfivars *efivars = fu_context_get_efivars(ctx);
+
+		last = fu_utf8_to_utf16_bytes(idxs[i],
+					      G_LITTLE_ENDIAN,
+					      FU_UTF_CONVERT_FLAG_NONE,
+					      &error);
+		g_assert_no_error(error);
+		g_assert_nonnull(last);
+		ret = fu_efivars_set_data_bytes(efivars,
+						FU_EFIVARS_GUID_EFI_CAPSULE_REPORT,
+						"CapsuleLast",
+						last,
+						0,
+						&error);
+		g_assert_no_error(error);
+		g_assert_true(ret);
+
+		cap = fu_uefi_cod_device_build_efi_result("cc4cbfa9-bf9d-540b-b92b-172ce31013c1");
+		ret = fu_efivars_set_data_bytes(efivars,
+						FU_EFIVARS_GUID_EFI_CAPSULE_REPORT,
+						idxs[i],
+						cap,
+						0,
+						&error);
+		g_assert_no_error(error);
+		g_assert_true(ret);
+
+		/* the result is stored with a hexadecimal variable name */
+		dev = g_object_new(FU_TYPE_UEFI_COD_DEVICE,
+				   "context",
+				   ctx,
+				   "fw-class",
+				   "cc4cbfa9-bf9d-540b-b92b-172ce31013c1",
+				   NULL);
+		ret = fu_device_get_results(dev, &error);
+		g_assert_no_error(error);
+		g_assert_true(ret);
+		g_assert_cmpint(fu_uefi_capsule_device_get_status(FU_UEFI_CAPSULE_DEVICE(dev)),
+				==,
+				FU_UEFI_CAPSULE_DEVICE_STATUS_ERROR_AUTH_ERROR);
+	}
 }
 
 #ifndef EFI_OS_DIR
@@ -1040,6 +1101,114 @@ fu_uefi_update_info_func(void)
 			"/EFI/fedora/fw/fwupd-697bd920-12cf-4da9-8385-996909bc6559.cap");
 }
 
+static gchar *
+fu_uefi_capsule_build_shim_pefile(FuTemporaryDirectory *tmpdir,
+				  const gchar *pkgnote_json,
+				  GError **error)
+{
+	g_autofree gchar *fn = NULL;
+	g_autoptr(FuFirmware) firmware = fu_pefile_firmware_new();
+	g_autoptr(FuFirmware) img_text = fu_firmware_new();
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GBytes) blob_text = g_bytes_new_static("hello world", 11);
+
+	/* build a PE file that optionally has a .pkgnote JSON COFF section */
+	fu_firmware_set_id(img_text, ".text");
+	fu_firmware_set_bytes(img_text, blob_text);
+	if (!fu_firmware_add_image(firmware, img_text, error))
+		return NULL;
+	if (pkgnote_json != NULL) {
+		g_autoptr(FuFirmware) img_pkgnote = fu_firmware_new();
+		g_autoptr(GBytes) blob_pkgnote = g_bytes_new(pkgnote_json, strlen(pkgnote_json));
+		fu_firmware_set_id(img_pkgnote, ".pkgnote");
+		fu_firmware_set_bytes(img_pkgnote, blob_pkgnote);
+		if (!fu_firmware_add_image(firmware, img_pkgnote, error))
+			return NULL;
+	}
+	blob = fu_firmware_write(firmware, error);
+	if (blob == NULL)
+		return NULL;
+
+	/* write to a file as the function under test reparses from disk */
+	fn = fu_temporary_directory_build(tmpdir, "shimx64.efi", NULL);
+	if (!fu_bytes_set_contents(fn, blob, error))
+		return NULL;
+	return g_steal_pointer(&fn);
+}
+
+static void
+fu_uefi_bootmgr_shim_hive_supported_func(void)
+{
+	gboolean hive_supported = FALSE;
+	gboolean ret;
+	g_autofree gchar *fn = NULL;
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* a .pkgnote advertising shimHive version 1 means HIVE is supported */
+	tmpdir = fu_temporary_directory_new("uefi-capsule-shim", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	fn = fu_uefi_capsule_build_shim_pefile(tmpdir,
+					       "{\"capabilities\":{\"shimHive\":1}}",
+					       &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(fn);
+
+	ret = fu_uefi_bootmgr_shim_get_hive_supported(fn, &hive_supported, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_true(hive_supported);
+}
+
+static void
+fu_uefi_bootmgr_shim_hive_unsupported_func(void)
+{
+	gboolean hive_supported = FALSE;
+	gboolean ret;
+	g_autofree gchar *fn = NULL;
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* a .pkgnote advertising shimHive version 0 means HIVE is not supported */
+	tmpdir = fu_temporary_directory_new("uefi-capsule-shim", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	fn = fu_uefi_capsule_build_shim_pefile(tmpdir,
+					       "{\"capabilities\":{\"shimHive\":0}}",
+					       &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(fn);
+
+	ret = fu_uefi_bootmgr_shim_get_hive_supported(fn, &hive_supported, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_false(hive_supported);
+}
+
+static void
+fu_uefi_bootmgr_shim_hive_no_pkgnote_func(void)
+{
+	gboolean hive_supported = FALSE;
+	gboolean ret;
+	g_autofree gchar *fn = NULL;
+	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
+	g_autoptr(GError) error = NULL;
+
+	/* no .pkgnote section at all means we assume no HIVE support */
+	tmpdir = fu_temporary_directory_new("uefi-capsule-shim", &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(tmpdir);
+	fn = fu_uefi_capsule_build_shim_pefile(tmpdir, NULL, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(fn);
+
+	ret = fu_uefi_bootmgr_shim_get_hive_supported(fn, &hive_supported, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	g_assert_false(hive_supported);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1057,6 +1226,7 @@ main(int argc, char **argv)
 	g_test_add_func("/uefi-capsule/framebuffer", fu_uefi_framebuffer_func);
 	g_test_add_func("/uefi-capsule/bitmap", fu_uefi_bitmap_func);
 	g_test_add_func("/uefi-capsule/cod-device", fu_uefi_cod_device_func);
+	g_test_add_func("/uefi-capsule/cod-device/hex-idx", fu_uefi_cod_device_hex_idx_func);
 	g_test_add_func("/uefi-capsule/update-info", fu_uefi_update_info_func);
 	g_test_add_func("/uefi-capsule/update-info/xml", fu_uefi_update_info_xml_func);
 	g_test_add_func("/uefi-capsule/no-coalesce", fu_uefi_capsule_no_coalesce_func);
@@ -1065,5 +1235,11 @@ main(int argc, char **argv)
 	g_test_add_func("/uefi-capsule/cod", fu_uefi_capsule_cod_func);
 	g_test_add_func("/uefi-capsule/no-cod", fu_uefi_capsule_no_cod_func);
 	g_test_add_func("/uefi-capsule/grub", fu_uefi_capsule_grub_func);
+	g_test_add_func("/uefi-capsule/shim-hive/supported",
+			fu_uefi_bootmgr_shim_hive_supported_func);
+	g_test_add_func("/uefi-capsule/shim-hive/unsupported",
+			fu_uefi_bootmgr_shim_hive_unsupported_func);
+	g_test_add_func("/uefi-capsule/shim-hive/no-pkgnote",
+			fu_uefi_bootmgr_shim_hive_no_pkgnote_func);
 	return g_test_run();
 }

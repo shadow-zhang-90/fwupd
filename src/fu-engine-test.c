@@ -9,10 +9,10 @@
 #include "fwupd-remote-private.h"
 
 #include "../plugins/test/fu-test-plugin.h"
-#include "fu-bios-settings-private.h"
 #include "fu-config-private.h"
 #include "fu-context-private.h"
 #include "fu-device-private.h"
+#include "fu-engine-helper.h"
 #include "fu-engine-requirements.h"
 #include "fu-engine.h"
 #include "fu-history.h"
@@ -162,7 +162,7 @@ fu_engine_generate_md_func(void)
 
 	/* verify checksums */
 	tmp = xb_node_query_text(component, "releases/release/checksum[@target='container']", NULL);
-	g_assert_cmpstr(tmp, ==, "71aefb2a9b412833d8c519d5816ef4c5668e5e76");
+	g_assert_cmpstr(tmp, ==, "cd289bd1be2aaf3b99ccdfd206936333f34b4350");
 	tmp = xb_node_query_text(component, "releases/release/checksum[@target='content']", NULL);
 	g_assert_cmpstr(tmp, ==, NULL);
 }
@@ -219,6 +219,30 @@ fu_engine_test_plugin_mutable_enumeration(void)
 	fu_plugin_remove_flag(plugin, FWUPD_PLUGIN_FLAG_MUTABLE_ENUMERATION);
 	ret = fu_engine_plugin_allows_enumeration(engine, plugin);
 	g_assert_true(ret);
+}
+
+static void
+fu_engine_esp_location_func(void)
+{
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
+	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(GError) error = NULL;
+	gboolean ret;
+
+	ret = fu_engine_load(engine, FU_ENGINE_LOAD_FLAG_NO_CACHE, progress, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* the configured ESP is used when choosing between volumes */
+	fu_config_set_value_internal(fu_context_get_config(ctx), "fwupd", "EspLocation", "/boot");
+	g_signal_emit_by_name(fu_context_get_config(ctx), "changed");
+	g_assert_cmpstr(fu_context_get_esp_location(ctx), ==, "/boot");
+
+	/* removing the setting goes back to automatic selection */
+	fu_config_set_value_internal(fu_context_get_config(ctx), "fwupd", "EspLocation", NULL);
+	g_signal_emit_by_name(fu_context_get_config(ctx), "changed");
+	g_assert_null(fu_context_get_esp_location(ctx));
 }
 
 static void
@@ -834,7 +858,7 @@ fu_engine_require_hwid_func(void)
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(FuRelease) release = fu_release_new();
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(XbNode) component = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
 
@@ -853,10 +877,10 @@ fu_engine_require_hwid_func(void)
 	/* get generated file as a blob */
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "hwid-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	cabinet = fu_engine_build_cabinet_from_stream(engine, stream, &error);
+	cabinet = fu_engine_build_cabinet_from_stream(engine, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(cabinet);
 
@@ -905,7 +929,7 @@ fu_engine_get_details_added_func(void)
 	g_autoptr(FuEngineRequest) request = fu_engine_request_new(NULL);
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
 
@@ -932,13 +956,14 @@ fu_engine_get_details_added_func(void)
 	/* get details */
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "hwid-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	checksum_sha256 = fu_input_stream_compute_checksum(stream, G_CHECKSUM_SHA256, &error);
+	checksum_sha256 =
+	    fu_input_stream_compute_checksum(FWUPD_INPUT_STREAM(stream), G_CHECKSUM_SHA256, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(checksum_sha256);
-	devices = fu_engine_get_details(engine, request, stream, &error);
+	devices = fu_engine_get_details(engine, request, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(devices);
 	g_assert_cmpint(devices->len, ==, 1);
@@ -961,7 +986,7 @@ fu_engine_get_details_missing_func(void)
 	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
 	g_autoptr(FuEngineRequest) request = fu_engine_request_new(NULL);
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
@@ -977,10 +1002,10 @@ fu_engine_get_details_missing_func(void)
 	/* get details */
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "hwid-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	devices = fu_engine_get_details(engine, request, stream, &error);
+	devices = fu_engine_get_details(engine, request, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(devices);
 	g_assert_cmpint(devices->len, ==, 1);
@@ -989,6 +1014,54 @@ fu_engine_get_details_missing_func(void)
 	release = fu_device_get_release_default(device_tmp);
 	g_assert_nonnull(release);
 	g_assert_cmpstr(fwupd_release_get_version(release), ==, "1.2.3");
+}
+
+static void
+fu_engine_get_details_refcount_func(void)
+{
+	FuDevice *device_tmp;
+	FwupdRelease *release_tmp;
+	GPtrArray *devices;
+	gboolean ret;
+	g_autofree gchar *filename = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
+	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
+	g_autoptr(FuEngineRequest) request = fu_engine_request_new(NULL);
+	g_autoptr(FwupdFileInputStream) stream = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(GError) error = NULL;
+	g_autoptr(XbSilo) silo_empty = xb_silo_new();
+
+	/* no metadata in daemon */
+	fu_engine_set_silo(engine, silo_empty);
+
+	/* load engine to get FuConfig set up */
+	ret = fu_engine_load(engine, FU_ENGINE_LOAD_FLAG_NO_CACHE, progress, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* get details */
+	filename =
+	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "hwid-1.2.3.cab", NULL);
+	stream = fwupd_file_input_stream_new(filename, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(stream);
+	devices = fu_engine_get_details(engine, request, FWUPD_INPUT_STREAM(stream), &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(devices);
+	g_assert_cmpint(devices->len, ==, 1);
+	device_tmp = g_ptr_array_index(devices, 0);
+	release_tmp = fu_device_get_release_default(device_tmp);
+	g_assert_nonnull(release_tmp);
+
+	/* the release only has a weak reference on the device, so unreferencing
+	 * the device also destroys the release -- and the stream it holds, which
+	 * was built from the client file descriptor */
+	g_object_add_weak_pointer(G_OBJECT(device_tmp), (gpointer *)&device_tmp);
+	g_object_add_weak_pointer(G_OBJECT(release_tmp), (gpointer *)&release_tmp);
+	g_ptr_array_unref(devices);
+	g_assert_null(device_tmp);
+	g_assert_null(release_tmp);
 }
 
 static void
@@ -1117,6 +1190,8 @@ fu_engine_downgrade_func(void)
 	g_autofree gchar *fn_broken = NULL;
 	g_autofree gchar *fn_stable = NULL;
 	g_autofree gchar *fn_testing = NULL;
+	g_autofree gchar *motd = NULL;
+	g_autofree gchar *motd_data = NULL;
 	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
 	g_autoptr(FuDevice) device = fu_device_new(ctx);
 	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
@@ -1202,6 +1277,9 @@ fu_engine_downgrade_func(void)
 	    "    <provides>"
 	    "      <firmware type=\"flashed\">aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee</firmware>"
 	    "    </provides>"
+	    "    <tags>"
+	    "      <tag namespace=\"lvfs\">fwupd-self-test-bkc</tag>"
+	    "    </tags>"
 	    "    <releases>"
 	    "      <release version=\"1.2.5\" date=\"2017-09-16\">"
 	    "        <size type=\"installed\">123</size>"
@@ -1311,6 +1389,22 @@ fu_engine_downgrade_func(void)
 	releases_up2 = fu_engine_get_upgrades(engine, request, fu_device_get_id(device), &error);
 	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_NOTHING_TO_DO);
 	g_assert_null(releases_up2);
+	g_clear_error(&error);
+
+	/* exercise fu_engine_get_release_with_tag() via the MOTD: the device is at
+	 * 1.2.3 but the newest release tagged with the host BKC is 1.2.6, so it is
+	 * not in the best known configuration */
+	fu_context_add_host_bkc(ctx, "fwupd-self-test-bkc");
+	ret = fu_engine_update_motd(engine, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	motd = fu_temporary_directory_build(tmpdir, MOTD_DIR, MOTD_FILE, NULL);
+	if (g_file_test(motd, G_FILE_TEST_EXISTS)) {
+		ret = g_file_get_contents(motd, &motd_data, NULL, &error);
+		g_assert_no_error(error);
+		g_assert_true(ret);
+		g_assert_nonnull(g_strstr_len(motd_data, -1, "best known configuration"));
+	}
 }
 
 static void
@@ -1838,7 +1932,7 @@ fu_engine_history_func(void)
 	g_autoptr(FwupdDevice) device3 = NULL;
 	g_autoptr(FwupdDevice) device4 = NULL;
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(XbNode) component = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
@@ -1889,10 +1983,10 @@ fu_engine_history_func(void)
 
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "noreqs-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	cabinet = fu_engine_build_cabinet_from_stream(engine, stream, &error);
+	cabinet = fu_engine_build_cabinet_from_stream(engine, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(cabinet);
 
@@ -1926,7 +2020,8 @@ fu_engine_history_func(void)
 	fu_device_set_modified_usec(device2, 1514338000ull * G_USEC_PER_SEC);
 	g_hash_table_remove_all(fwupd_release_get_metadata(fu_device_get_release_default(device2)));
 	device_str = fu_device_to_string(device2);
-	checksum = fu_input_stream_compute_checksum(stream, G_CHECKSUM_SHA1, &error);
+	checksum =
+	    fu_input_stream_compute_checksum(FWUPD_INPUT_STREAM(stream), G_CHECKSUM_SHA1, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(checksum);
 	device_str_expected =
@@ -2029,7 +2124,89 @@ fu_engine_history_verfmt_func(void)
 	fu_device_set_created_usec(device, 1515338000ull * G_USEC_PER_SEC);
 	fu_engine_add_device(engine, device);
 	g_assert_cmpint(fu_device_get_version_format(device), ==, FWUPD_VERSION_FORMAT_TRIPLET);
-	g_assert_cmpstr(fu_device_get_version(device), ==, "0.1.27");
+	g_assert_cmpstr(fu_device_get_version(device), ==, "1.0.27");
+}
+
+static void
+fu_engine_write_blob_for_device_id_func(void)
+{
+	gboolean ret;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
+	g_autoptr(FuDevice) device = fu_device_new(ctx);
+	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
+	g_autoptr(FuPlugin) plugin = fu_plugin_new_from_gtype(fu_test_plugin_get_type(), ctx);
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(GError) error = NULL;
+	g_autoptr(FuInputStream) stream_fw = NULL;
+	g_autoptr(XbSilo) silo_empty = xb_silo_new();
+
+	/* no metadata in daemon */
+	fu_engine_set_silo(engine, silo_empty);
+
+	/* set up dummy plugin */
+	fu_engine_add_plugin(engine, plugin);
+	ret = fu_engine_load(engine,
+			     FU_ENGINE_LOAD_FLAG_NO_CACHE | FU_ENGINE_LOAD_FLAG_ALLOW_TEST_PLUGIN,
+			     progress,
+			     &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* add a device that does not currently allow updates */
+	fu_device_set_version_format(device, FWUPD_VERSION_FORMAT_TRIPLET);
+	fu_device_set_version(device, "1.2.2");
+	fu_device_set_id(device, "test_device");
+	fu_device_build_vendor_id_u16(device, "USB", 0xFFFF);
+	fu_device_add_protocol(device, "com.acme");
+	fu_device_set_plugin(device, "test");
+	fu_device_add_instance_id(device, "12345678-1234-1234-1234-123456789012");
+	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_UNSIGNED_PAYLOAD);
+	fu_engine_add_device(engine, device);
+	stream_fw = FWUPD_INPUT_STREAM(
+	    fwupd_memory_input_stream_new_from_data((const guint8 *)"1.2.3", 5, NULL));
+
+	/* unknown device */
+	ret = fu_engine_write_blob_for_device_id(engine,
+						 "not_a_device",
+						 stream_fw,
+						 NULL,
+						 NULL,
+						 progress,
+						 FWUPD_INSTALL_FLAG_NONE,
+						 FWUPD_FEATURE_FLAG_NONE,
+						 &error);
+	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND);
+	g_assert_false(ret);
+	g_clear_error(&error);
+
+	/* not updatable */
+	ret = fu_engine_write_blob_for_device_id(engine,
+						 fu_device_get_id(device),
+						 stream_fw,
+						 NULL,
+						 NULL,
+						 progress,
+						 FWUPD_INSTALL_FLAG_NONE,
+						 FWUPD_FEATURE_FLAG_NONE,
+						 &error);
+	g_assert_error(error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
+	g_assert_false(ret);
+	g_clear_error(&error);
+
+	/* now allowed */
+	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_progress_reset(progress);
+	ret = fu_engine_write_blob_for_device_id(engine,
+						 fu_device_get_id(device),
+						 stream_fw,
+						 "firmware.bin",
+						 "1.2.3",
+						 progress,
+						 FWUPD_INSTALL_FLAG_NONE,
+						 FWUPD_FEATURE_FLAG_NONE,
+						 &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
 }
 
 static void
@@ -2079,16 +2256,17 @@ fu_engine_install_loop_restart_func(void)
 	fu_device_set_metadata_integer(device, "nr-update", 0);
 	fu_device_set_metadata_integer(device, "nr-attach", 0);
 
-	stream_fw = fu_memory_input_stream_new_from_data((const guint8 *)"1.2.3", 5, NULL);
+	stream_fw = FWUPD_INPUT_STREAM(
+	    fwupd_memory_input_stream_new_from_data((const guint8 *)"1.2.3", 5, NULL));
 	fu_release_set_stream(release, stream_fw);
-	ret = fu_engine_install_blob(engine,
-				     device,
-				     release,
-				     progress,
-				     FWUPD_INSTALL_FLAG_NO_HISTORY |
-					 FU_FIRMWARE_PARSE_FLAG_CACHE_STREAM,
-				     FWUPD_FEATURE_FLAG_NONE,
-				     &error);
+	ret = fu_engine_write_blob(engine,
+				   device,
+				   release,
+				   progress,
+				   FWUPD_INSTALL_FLAG_NO_HISTORY |
+				       FU_FIRMWARE_PARSE_FLAG_CACHE_STREAM,
+				   FWUPD_FEATURE_FLAG_NONE,
+				   &error);
 	g_assert_no_error(error);
 	g_assert_true(ret);
 
@@ -2112,7 +2290,7 @@ fu_engine_multiple_rels_func(void)
 	g_autoptr(FuPlugin) plugin = fu_plugin_new_from_gtype(fu_test_plugin_get_type(), ctx);
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(XbNode) component = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
 	g_autoptr(FuEngineRequest) request = fu_engine_request_new(NULL);
@@ -2157,10 +2335,10 @@ fu_engine_multiple_rels_func(void)
 					 "multiple-rels",
 					 "multiple-rels-1.2.4.cab",
 					 NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	cabinet = fu_engine_build_cabinet_from_stream(engine, stream, &error);
+	cabinet = fu_engine_build_cabinet_from_stream(engine, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(cabinet);
 
@@ -2231,7 +2409,7 @@ fu_engine_history_inherit(void)
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(XbNode) component = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
@@ -2281,10 +2459,10 @@ fu_engine_history_inherit(void)
 
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "noreqs-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	cabinet = fu_engine_build_cabinet_from_stream(engine, stream, &error);
+	cabinet = fu_engine_build_cabinet_from_stream(engine, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(cabinet);
 
@@ -2378,7 +2556,7 @@ fu_engine_install_needs_reboot(void)
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(XbNode) component = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
@@ -2428,10 +2606,10 @@ fu_engine_install_needs_reboot(void)
 
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "noreqs-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	cabinet = fu_engine_build_cabinet_from_stream(engine, stream, &error);
+	cabinet = fu_engine_build_cabinet_from_stream(engine, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(cabinet);
 
@@ -2496,7 +2674,7 @@ fu_engine_install_request(void)
 	g_autoptr(FuPlugin) plugin = fu_plugin_new_from_gtype(fu_test_plugin_get_type(), ctx);
 	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(XbNode) component = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
@@ -2540,10 +2718,10 @@ fu_engine_install_request(void)
 
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "noreqs-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	cabinet = fu_engine_build_cabinet_from_stream(engine, stream, &error);
+	cabinet = fu_engine_build_cabinet_from_stream(engine, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(cabinet);
 
@@ -2596,7 +2774,7 @@ fu_engine_history_error_func(void)
 	g_autoptr(FuTemporaryDirectory) tmpdir = NULL;
 	g_autoptr(GError) error2 = NULL;
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(XbNode) component = NULL;
 	g_autoptr(XbSilo) silo_empty = xb_silo_new();
@@ -2647,10 +2825,10 @@ fu_engine_history_error_func(void)
 	/* install the wrong thing */
 	filename =
 	    g_test_build_filename(G_TEST_BUILT, "tests", "missing-hwid", "noreqs-1.2.3.cab", NULL);
-	stream = fu_input_stream_from_path(filename, &error);
+	stream = fwupd_file_input_stream_new(filename, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(stream);
-	cabinet = fu_engine_build_cabinet_from_stream(engine, stream, &error);
+	cabinet = fu_engine_build_cabinet_from_stream(engine, FWUPD_INPUT_STREAM(stream), &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(cabinet);
 	component = fu_cabinet_get_component(cabinet, "com.hughski.test.firmware", &error);
@@ -2678,7 +2856,8 @@ fu_engine_history_error_func(void)
 	fu_device_set_modified_usec(device2, 1514338000ull * G_USEC_PER_SEC);
 	g_hash_table_remove_all(fwupd_release_get_metadata(fu_device_get_release_default(device2)));
 	device_str = fu_device_to_string(device2);
-	checksum = fu_input_stream_compute_checksum(stream, G_CHECKSUM_SHA1, &error);
+	checksum =
+	    fu_input_stream_compute_checksum(FWUPD_INPUT_STREAM(stream), G_CHECKSUM_SHA1, &error);
 	g_assert_no_error(error);
 	g_assert_nonnull(checksum);
 	device_str_expected = g_strdup_printf(
@@ -2776,6 +2955,10 @@ static void
 fu_test_plugin_device_added_cb(FuPlugin *plugin, FuDevice *device, gpointer user_data)
 {
 	FuDevice **dev = (FuDevice **)user_data;
+
+	/* only interested in the main test device */
+	if (fu_device_has_flag(device, FWUPD_DEVICE_FLAG_IS_PROGRAMMER_TARGET))
+		return;
 	*dev = g_object_ref(device);
 	fu_test_loop_quit();
 }
@@ -2880,6 +3063,10 @@ static void
 fu_test_plugin_composite_device_added_cb(FuPlugin *plugin, FuDevice *device, gpointer user_data)
 {
 	GPtrArray *devices = (GPtrArray *)user_data;
+
+	/* not part of the composite update */
+	if (fu_device_has_flag(device, FWUPD_DEVICE_FLAG_IS_PROGRAMMER_TARGET))
+		return;
 	g_ptr_array_add(devices, g_object_ref(device));
 }
 
@@ -3075,10 +3262,19 @@ fu_engine_plugin_composite_func(void)
 	g_ptr_array_sort(releases, fu_plugin_composite_release_sort_cb);
 	dev_tmp = fu_release_get_device(FU_RELEASE(g_ptr_array_index(releases, 0)));
 	g_assert_cmpstr(fu_device_get_logical_id(dev_tmp), ==, "child1");
+	g_assert_cmpstr(fu_device_get_composite_id(dev_tmp),
+			==,
+			"08d460be0f1f9f128413f816022a6439e0078018");
+
 	dev_tmp = fu_release_get_device(FU_RELEASE(g_ptr_array_index(releases, 1)));
 	g_assert_cmpstr(fu_device_get_logical_id(dev_tmp), ==, "child2");
+	g_assert_cmpstr(fu_device_get_composite_id(dev_tmp),
+			==,
+			"08d460be0f1f9f128413f816022a6439e0078018");
+
 	dev_tmp = fu_release_get_device(FU_RELEASE(g_ptr_array_index(releases, 2)));
 	g_assert_cmpstr(fu_device_get_logical_id(dev_tmp), ==, NULL);
+	g_assert_cmpstr(fu_device_get_id(dev_tmp), ==, "08d460be0f1f9f128413f816022a6439e0078018");
 
 	/* install the cab */
 	ret = fu_engine_install_releases(engine,
@@ -3119,6 +3315,32 @@ fu_engine_plugin_composite_func(void)
 		metadata = fu_device_get_metadata(device, "frombulator");
 		g_assert_cmpstr(metadata, ==, "1");
 	}
+
+	/* retry this with composite-single-payload set */
+	for (guint i = 0; i < 3; i++) {
+		FuRelease *release = FU_RELEASE(g_ptr_array_index(releases, i));
+		dev_tmp = fu_release_get_device(release);
+		fu_device_add_flag(dev_tmp, FWUPD_DEVICE_FLAG_COMPOSITE_SINGLE_PAYLOAD);
+		fu_device_set_version(dev_tmp, "0.0.1");
+	}
+
+	/* install the cab */
+	ret = fu_engine_install_releases(engine,
+					 request,
+					 releases,
+					 progress,
+					 FWUPD_INSTALL_FLAG_NONE,
+					 &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	/* verify we only deployed this once */
+	dev_tmp = fu_release_get_device(FU_RELEASE(g_ptr_array_index(releases, 0)));
+	g_assert_cmpstr(fu_device_get_version(dev_tmp), ==, "1.2.3");
+	dev_tmp = fu_release_get_device(FU_RELEASE(g_ptr_array_index(releases, 1)));
+	g_assert_cmpstr(fu_device_get_version(dev_tmp), ==, "0.0.1");
+	dev_tmp = fu_release_get_device(FU_RELEASE(g_ptr_array_index(releases, 2)));
+	g_assert_cmpstr(fu_device_get_version(dev_tmp), ==, "0.0.1");
 }
 
 static void
@@ -3338,41 +3560,46 @@ fu_engine_modify_bios_settings_func(void)
 {
 	gboolean ret;
 	const gchar *current;
-	FwupdBiosSetting *attr1;
-	FwupdBiosSetting *attr2;
-	FwupdBiosSetting *attr3;
-	FwupdBiosSetting *attr4;
+	FuBiosSetting *attr1;
+	FuBiosSetting *attr2;
+	FuBiosSetting *attr3;
+	FuBiosSetting *attr4;
+	FuPlugin *plugin;
 	g_autofree gchar *testdatadir = NULL;
 	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
 	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
 	g_autoptr(GError) error = NULL;
-	g_autoptr(FuBiosSettings) attrs = NULL;
 	g_autoptr(GPtrArray) items = NULL;
 	g_autoptr(GHashTable) bios_settings =
 	    g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 
-#ifdef _WIN32
-	g_test_skip("BIOS settings not supported on Windows");
-	return;
-#endif
-
 	/* load contrived attributes */
 	testdatadir = g_test_build_filename(G_TEST_DIST, "tests", "bios-attrs", NULL);
 	fu_context_set_path(ctx, FU_PATH_KIND_SYSFSDIR_FW_ATTRIB, testdatadir);
-
-	ret = fu_context_reload_bios_settings(ctx, &error);
+	ret = fu_engine_load(engine,
+			     FU_ENGINE_LOAD_FLAG_READONLY | FU_ENGINE_LOAD_FLAG_NO_CACHE |
+				 FU_ENGINE_LOAD_FLAG_BUILTIN_PLUGINS | FU_ENGINE_LOAD_FLAG_COLDPLUG,
+			     progress,
+			     &error);
 	g_assert_no_error(error);
 	g_assert_true(ret);
 
-	attrs = fu_context_get_bios_settings(ctx);
-	items = fu_bios_settings_get_all(attrs);
+	/* not available without UEFI */
+	plugin = fu_engine_get_plugin_by_name(engine, "linux-fwattr", NULL);
+	if (plugin == NULL) {
+		g_test_skip("BIOS settings not supported without linux-fwattr");
+		return;
+	}
+
+	items = fu_context_get_bios_settings(ctx);
 	g_assert_cmpint(items->len, ==, 4);
 
 	/* enumeration */
 	attr1 = fu_context_get_bios_setting(ctx, "com.fwupd-internal.Absolute");
 	g_assert_nonnull(attr1);
 
-	current = fwupd_bios_setting_get_current_value(attr1);
+	current = fu_bios_setting_get_current_value(attr1);
 	g_assert_nonnull(current);
 
 	g_hash_table_insert(bios_settings, g_strdup("Absolute"), g_strdup("Disabled"));
@@ -3419,7 +3646,7 @@ fu_engine_modify_bios_settings_func(void)
 	attr2 = fu_context_get_bios_setting(ctx, "com.fwupd-internal.Asset");
 	g_assert_nonnull(attr2);
 
-	current = fwupd_bios_setting_get_current_value(attr2);
+	current = fu_bios_setting_get_current_value(attr2);
 	g_assert_nonnull(current);
 
 	g_hash_table_remove_all(bios_settings);
@@ -3448,7 +3675,7 @@ fu_engine_modify_bios_settings_func(void)
 	attr3 = fu_context_get_bios_setting(ctx, "com.fwupd-internal.CustomChargeStop");
 	g_assert_nonnull(attr3);
 
-	current = fwupd_bios_setting_get_current_value(attr3);
+	current = fu_bios_setting_get_current_value(attr3);
 	g_assert_nonnull(current);
 
 	g_hash_table_remove_all(bios_settings);
@@ -3481,7 +3708,7 @@ fu_engine_modify_bios_settings_func(void)
 	attr4 = fu_context_get_bios_setting(ctx, "com.fwupd-internal.pending_reboot");
 	g_assert_nonnull(attr4);
 
-	current = fwupd_bios_setting_get_current_value(attr4);
+	current = fu_bios_setting_get_current_value(attr4);
 	g_assert_nonnull(current);
 
 	g_hash_table_remove_all(bios_settings);
@@ -3565,6 +3792,7 @@ main(int argc, char **argv)
 	g_test_add_func("/fwupd/engine/plugin/module", fu_engine_plugin_module_func);
 	g_test_add_func("/fwupd/engine/get-details-added", fu_engine_get_details_added_func);
 	g_test_add_func("/fwupd/engine/get-details-missing", fu_engine_get_details_missing_func);
+	g_test_add_func("/fwupd/engine/get-details-refcount", fu_engine_get_details_refcount_func);
 	g_test_add_func("/fwupd/engine/device-unlock", fu_engine_device_unlock_func);
 	g_test_add_func("/fwupd/engine/device-equivalent", fu_engine_device_equivalent_func);
 	g_test_add_func("/fwupd/engine/device-md-set-flags", fu_engine_device_md_set_flags_func);
@@ -3576,6 +3804,8 @@ main(int argc, char **argv)
 			fu_engine_device_md_checksum_set_version_wrong_proto_func);
 	g_test_add_func("/fwupd/engine/multiple-releases", fu_engine_multiple_rels_func);
 	g_test_add_func("/fwupd/engine/install-loop-restart", fu_engine_install_loop_restart_func);
+	g_test_add_func("/fwupd/engine/write-blob-for-device-id",
+			fu_engine_write_blob_for_device_id_func);
 	g_test_add_func("/fwupd/engine/install-request", fu_engine_install_request);
 	g_test_add_func("/fwupd/engine/history-success", fu_engine_history_func);
 	g_test_add_func("/fwupd/engine/history-verfmt", fu_engine_history_verfmt_func);
@@ -3600,6 +3830,7 @@ main(int argc, char **argv)
 	g_test_add_func("/fwupd/engine/generate-md", fu_engine_generate_md_func);
 	g_test_add_func("/fwupd/engine/better-than", fu_engine_device_better_than_func);
 	g_test_add_func("/fwupd/engine/plugin/mutable", fu_engine_test_plugin_mutable_enumeration);
+	g_test_add_func("/fwupd/engine/esp-location", fu_engine_esp_location_func);
 	g_test_add_func("/fwupd/engine/plugin/composite", fu_engine_plugin_composite_func);
 	g_test_add_func("/fwupd/engine/plugin/composite-multistep",
 			fu_engine_plugin_composite_multistep_func);

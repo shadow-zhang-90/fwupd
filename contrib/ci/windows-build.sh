@@ -11,7 +11,7 @@ fi
 if [ "$(id -u)" -eq 0 ]; then
     dnf install -y python3
     dnf install -y xvfb-run
-    ./contrib/ci/fwupd_setup_helpers.py --yes -o fedora -v mingw64 install-dependencies
+    ./fwupbuild --yes install-dependencies --os fedora --filter mingw64
 fi
 
 #prep

@@ -149,10 +149,13 @@ fu_redfish_backend_coldplug_member(FuRedfishBackend *self,
 	/* Dell specific currently */
 	if (self->system_id != NULL) {
 		fu_device_add_instance_str(dev, "SYSTEMID", self->system_id);
-		/* Ensure the reboot is not done immediately after installation, and only after a
-		 * wanted reboot */
-		fu_redfish_multipart_device_set_apply_time(FU_REDFISH_MULTIPART_DEVICE(dev),
-							   "OnReset");
+
+		/* ensure the reboot is not done immediately after installation */
+		if (self->device_gtype == FU_TYPE_REDFISH_MULTIPART_DEVICE &&
+		    self->system_id != NULL) {
+			fu_redfish_multipart_device_set_apply_time(FU_REDFISH_MULTIPART_DEVICE(dev),
+								   "OnReset");
+		}
 	}
 
 	/* some vendors do not specify the Targets array when updating */
@@ -204,7 +207,9 @@ fu_redfish_backend_coldplug_collection(FuRedfishBackend *self,
 						FU_REDFISH_REQUEST_PERFORM_FLAG_LOAD_JSON,
 						error))
 			return FALSE;
-		json_obj_tmp = fu_redfish_request_get_json_object(request);
+		json_obj_tmp = fu_redfish_request_get_json_object(request, error);
+		if (json_obj_tmp == NULL)
+			return FALSE;
 		if (!fu_redfish_backend_coldplug_member(self, json_obj_tmp, error))
 			return FALSE;
 	}
@@ -228,7 +233,9 @@ fu_redfish_backend_coldplug_inventory(FuRedfishBackend *self,
 					FU_REDFISH_REQUEST_PERFORM_FLAG_LOAD_JSON,
 					error))
 		return FALSE;
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	return fu_redfish_backend_coldplug_collection(self, json_obj, error);
 }
 
@@ -322,7 +329,11 @@ fu_redfish_backend_create_session(FuRedfishBackend *self, GError **error)
 		return FALSE;
 
 	/* save the session URI so we can log out later */
-	json_obj_resp = fu_redfish_request_get_json_object(request);
+	json_obj_resp = fu_redfish_request_get_json_object(request, error);
+	if (json_obj_resp == NULL) {
+		fu_redfish_backend_set_session_key(self, NULL);
+		return FALSE;
+	}
 	session_uri = fwupd_json_object_get_string(json_obj_resp, "@odata.id", error);
 	if (session_uri == NULL) {
 		g_prefix_error_literal(error, "failed to get session URI: ");
@@ -402,6 +413,49 @@ fu_redfish_backend_set_path_prefix(FuRedfishBackend *self, const gchar *path_pre
 	g_set_str(&self->path_prefix, path_prefix);
 }
 
+GType
+fu_redfish_backend_get_device_gtype(FuRedfishBackend *self)
+{
+	g_return_val_if_fail(FU_IS_REDFISH_BACKEND(self), G_TYPE_INVALID);
+	return self->device_gtype;
+}
+
+/* for tests */
+gboolean
+fu_redfish_backend_ensure_device_gtype(FuRedfishBackend *self, GError **error)
+{
+	FuContext *ctx = fu_backend_get_context(FU_BACKEND(self));
+	GPtrArray *hwids = fu_context_get_hwid_guids(ctx);
+
+	g_return_val_if_fail(FU_IS_REDFISH_BACKEND(self), FALSE);
+	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+	for (guint i = 0; i < hwids->len; i++) {
+		const gchar *hwid = g_ptr_array_index(hwids, i);
+		const gchar *tmp;
+		GType gtype;
+
+		tmp = fu_context_lookup_quirk_by_id(ctx, hwid, "RedfishDeviceGType");
+		if (tmp == NULL)
+			continue;
+		gtype = g_type_from_name(tmp);
+		if (gtype == FU_TYPE_REDFISH_DEVICE ||
+		    !g_type_is_a(gtype, FU_TYPE_REDFISH_DEVICE)) {
+			g_set_error(error,
+				    FWUPD_ERROR,
+				    FWUPD_ERROR_NOT_SUPPORTED,
+				    "%s is not an updatable Redfish device type",
+				    tmp);
+			return FALSE;
+		}
+		self->device_gtype = gtype;
+		break;
+	}
+
+	/* success */
+	return TRUE;
+}
+
 static gboolean
 fu_redfish_backend_has_smc_update_path(FwupdJsonObject *json_obj)
 {
@@ -446,7 +500,9 @@ fu_redfish_backend_coldplug(FuBackend *backend, FuProgress *progress, GError **e
 					error))
 		return FALSE;
 
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	if (!fwupd_json_object_get_boolean_with_default(json_obj,
 							"ServiceEnabled",
 							&service_enabled,
@@ -490,6 +546,11 @@ fu_redfish_backend_coldplug(FuBackend *backend, FuProgress *progress, GError **e
 				    "HttpPushUri and MultipartHttpPushUri are invalid");
 		return FALSE;
 	}
+
+	/* a system quirk can override the device type chosen above */
+	if (!fu_redfish_backend_ensure_device_gtype(self, error))
+		return FALSE;
+
 	if (!fwupd_json_object_get_integer_with_default(json_obj,
 							"MaxImageSizeBytes",
 							&max_image_size,
@@ -537,7 +598,9 @@ fu_redfish_backend_setup_dell_member(FuRedfishBackend *self,
 					FU_REDFISH_REQUEST_PERFORM_FLAG_LOAD_JSON,
 					error))
 		return FALSE;
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	if (!fwupd_json_object_has_node(json_obj, "Oem")) {
 		g_set_error_literal(error, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND, "no Oem in Member");
 		return FALSE;
@@ -579,7 +642,9 @@ fu_redfish_backend_setup_dell(FuRedfishBackend *self, GError **error)
 					FU_REDFISH_REQUEST_PERFORM_FLAG_LOAD_JSON,
 					error))
 		return FALSE;
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	json_arr_members = fwupd_json_object_get_array(json_obj, "Members", error);
 	if (json_arr_members == NULL)
 		return FALSE;
@@ -628,7 +693,9 @@ fu_redfish_backend_setup(FuBackend *backend,
 					FU_REDFISH_REQUEST_PERFORM_FLAG_LOAD_JSON,
 					error))
 		return FALSE;
-	json_obj = fu_redfish_request_get_json_object(request);
+	json_obj = fu_redfish_request_get_json_object(request, error);
+	if (json_obj == NULL)
+		return FALSE;
 	if (fwupd_json_object_has_node(json_obj, "ServiceVersion")) {
 		version = fwupd_json_object_get_string(json_obj, "ServiceVersion", NULL);
 	} else if (fwupd_json_object_has_node(json_obj, "RedfishVersion")) {
@@ -722,6 +789,22 @@ fu_redfish_backend_set_bearer_token(FuRedfishBackend *self, const gchar *bearer_
 {
 	g_return_if_fail(FU_IS_REDFISH_BACKEND(self));
 	g_set_str(&self->bearer_token, bearer_token);
+}
+
+/**
+ * fu_redfish_backend_has_bearer_token:
+ * @self: a #FuRedfishBackend
+ *
+ * Gets if a bearer token is configured, in which case it is used for
+ * authentication instead of the username and password.
+ *
+ * Returns: %TRUE if a bearer token is set
+ **/
+gboolean
+fu_redfish_backend_has_bearer_token(FuRedfishBackend *self)
+{
+	g_return_val_if_fail(FU_IS_REDFISH_BACKEND(self), FALSE);
+	return self->bearer_token != NULL;
 }
 
 void

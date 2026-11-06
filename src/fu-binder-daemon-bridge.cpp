@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
+#define G_LOG_DOMAIN "FuBinder"
+
 #include "config.h"
 
 #include <aidl/org/freedesktop/fwupd/BnFwupd.h>
@@ -29,6 +31,7 @@
 #include "fu-binder-daemon-bridge.h"
 #include "fu-binder-daemon.h"
 #include "fu-context-private.h"
+#include "fu-security-attrs-private.h"
 
 namespace aidl_fwupd = aidl::org::freedesktop::fwupd;
 
@@ -47,8 +50,8 @@ FwupdProperties_to_AIDL(FuBinderDaemon *self)
 	const gchar *host_vendor = fu_engine_get_host_vendor(engine);
 	const gchar *host_product = fu_engine_get_host_product(engine);
 	const gchar *host_machine_id = fu_engine_get_host_machine_id(engine);
-	g_autofree gchar *host_security_id = fu_engine_get_host_security_id(engine, NULL);
-	g_autofree gchar *host_bkc = fu_context_get_config_str(ctx, "HostBkc");
+	g_autofree gchar *host_security_id = NULL;
+	g_autofree gchar *host_bkc = fu_context_get_host_bkcs_as_str(ctx);
 	p.daemonVersion = PACKAGE_VERSION;
 	if (host_bkc != NULL)
 		p.hostBkc = host_bkc;
@@ -58,11 +61,13 @@ FwupdProperties_to_AIDL(FuBinderDaemon *self)
 		p.hostProduct = host_product;
 	if (host_machine_id != NULL)
 		p.hostMachineId = host_machine_id;
+	host_security_id = fu_engine_get_host_security_id(engine, NULL);
 	if (host_security_id != NULL)
 		p.hostSecurityId = host_security_id;
 	p.tainted = FALSE;
 	p.interactive = FALSE;
 	p.onlyTrusted = fu_context_get_config_bool(ctx, "OnlyTrusted");
+	p.pendingReboot = fu_context_has_flag(ctx, FU_CONTEXT_FLAG_PENDING_REBOOT);
 	p.status = fu_daemon_get_status(FU_DAEMON(self));
 	p.percentage = fu_daemon_get_percentage(FU_DAEMON(self));
 	p.batteryLevel = fu_context_get_battery_level(ctx);
@@ -300,6 +305,11 @@ class FwupdBinderBridge : public aidl_fwupd::BnFwupd
 		g_autoptr(GError) error = NULL;
 		g_autoptr(GPtrArray) devices = NULL;
 
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-devices", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
 		devices = fu_engine_get_devices(engine, &error);
 		if (devices == NULL) {
 			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
@@ -318,18 +328,19 @@ class FwupdBinderBridge : public aidl_fwupd::BnFwupd
 	{
 		g_info("received install request for device %s", in_request.id.c_str());
 
+		/* this many be -1 if we're relying on AllowFilenameHintForLocal */
 		int engine_fd = in_request.firmwareFd.get();
-		if (engine_fd < 0) {
-			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
-			    FWUPD_ERROR_INVALID_FILE,
-			    "invalid file descriptor received");
-		}
 
 		g_autoptr(GError) error = NULL;
+		const gchar *filename_hint = NULL;
+
+		if (in_request.filenameHint.has_value())
+			filename_hint = in_request.filenameHint.value().c_str();
 		if (!fu_binder_daemon_perform_install_bridge(m_daemon,
 							     in_request.id.c_str(),
 							     engine_fd,
 							     in_request.flags,
+							     filename_hint,
 							     &error)) {
 			std::string err_msg = error ? error->message : "Unknown engine error";
 			int err_code = error ? error->code : -1;
@@ -338,6 +349,29 @@ class FwupdBinderBridge : public aidl_fwupd::BnFwupd
 			    err_msg.c_str());
 		}
 
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	installBlob(const std::string &in_id,
+		    const ::ndk::ScopedFileDescriptor &in_fd,
+		    const std::optional<std::string> &in_filenameHint,
+		    const std::optional<std::string> &in_version) override
+	{
+		g_autoptr(GError) error = NULL;
+
+		g_info("received install blob request for device %s", in_id.c_str());
+		if (!fu_binder_daemon_write_blob_bridge(
+			m_daemon,
+			in_id.c_str(),
+			in_fd.get(),
+			in_filenameHint.has_value() ? in_filenameHint.value().c_str() : NULL,
+			in_version.has_value() ? in_version.value().c_str() : NULL,
+			&error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
 		return ::ndk::ScopedAStatus::ok();
 	}
 
@@ -362,7 +396,39 @@ class FwupdBinderBridge : public aidl_fwupd::BnFwupd
 		g_autoptr(GError) error = NULL;
 		g_autoptr(GPtrArray) releases = NULL;
 
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-upgrades", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
 		releases = fu_engine_get_upgrades(engine, request, in_deviceId.c_str(), &error);
+		if (releases == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		for (guint i = 0; i < releases->len; i++) {
+			FwupdRelease *release = FWUPD_RELEASE(g_ptr_array_index(releases, i));
+			_aidl_return->push_back(fu_binder_release_to_aidl(release));
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getReleases(const std::string &in_deviceId,
+		    std::vector<aidl_fwupd::FwupdRelease> *_aidl_return) override
+	{
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		g_autoptr(FuEngineRequest) request = fu_binder_daemon_create_request(m_daemon);
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GPtrArray) releases = NULL;
+
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-releases", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		releases = fu_engine_get_releases(engine, request, in_deviceId.c_str(), &error);
 		if (releases == NULL) {
 			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
 			    error->code,
@@ -382,6 +448,11 @@ class FwupdBinderBridge : public aidl_fwupd::BnFwupd
 		g_autoptr(GError) error = NULL;
 		g_autoptr(GPtrArray) remotes = NULL;
 
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-remotes", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
 		remotes = fu_engine_get_remotes(engine, &error);
 		if (remotes == NULL) {
 			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
@@ -398,13 +469,77 @@ class FwupdBinderBridge : public aidl_fwupd::BnFwupd
 	::ndk::ScopedAStatus
 	getHwids(std::vector<aidl_fwupd::FwupdHwid> *_aidl_return) override
 	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-hwids", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
 		*_aidl_return = fu_binder_daemon_get_hwids_as_AIDL(m_daemon);
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getPlugins(std::vector<aidl_fwupd::FwupdPlugin> *_aidl_return) override
+	{
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		g_autoptr(GError) error = NULL;
+		GPtrArray *plugins;
+
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-plugins", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		plugins = fu_engine_get_plugins(engine);
+		for (size_t i = 0; i < plugins->len; i++) {
+			FwupdPlugin *plugin = FWUPD_PLUGIN(g_ptr_array_index(plugins, i));
+			_aidl_return->push_back(fu_binder_plugin_to_aidl(plugin));
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	setFeatureFlags(int64_t in_flags) override
+	{
+		fu_binder_daemon_set_feature_flags(m_daemon, (FwupdFeatureFlags)in_flags);
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getHistory(std::vector<aidl_fwupd::FwupdDevice> *_aidl_return) override
+	{
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GPtrArray) devices = NULL;
+
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-history", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		devices = fu_engine_get_history(engine, &error);
+		if (devices == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		for (size_t i = 0; i < devices->len; i++) {
+			FwupdDevice *device = FWUPD_DEVICE(g_ptr_array_index(devices, i));
+			_aidl_return->push_back(fu_binder_device_to_aidl(device));
+		}
 		return ::ndk::ScopedAStatus::ok();
 	}
 
 	::ndk::ScopedAStatus
 	getProperties(aidl_fwupd::FwupdProperties *_aidl_return) override
 	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-properties", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
 		*_aidl_return = FwupdProperties_to_AIDL(m_daemon);
 		return ::ndk::ScopedAStatus::ok();
 	}
@@ -412,23 +547,372 @@ class FwupdBinderBridge : public aidl_fwupd::BnFwupd
 	::ndk::ScopedAStatus
 	updateMetadata(const aidl_fwupd::FwupdMetadata &in_metadata) override
 	{
-		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
-		gboolean ret;
 		g_autoptr(GError) error = NULL;
+		g_autoptr(FwupdUnixInputStream) stream = NULL;
+		g_autoptr(FwupdUnixInputStream) stream_sig = NULL;
 
-		ret = fu_engine_update_metadata(engine,
-						in_metadata.remoteId.c_str(),
-						in_metadata.dataFd.get(),
-						in_metadata.signatureFd.get(),
-						&error);
-		if (!ret) {
-			std::string err_msg = error ? error->message
-						    : "Unknown error updating metadata";
-			int err_code = error ? error->code : -1;
+		/* the ScopedFileDescriptor owns the fds */
+		stream = fwupd_unix_input_stream_new(in_metadata.dataFd.get(), FALSE, &error);
+		if (stream == NULL) {
 			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
-			    err_code,
-			    err_msg.c_str());
+			    error->code,
+			    error->message);
 		}
+		stream_sig =
+		    fwupd_unix_input_stream_new(in_metadata.signatureFd.get(), FALSE, &error);
+		if (stream_sig == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		if (!fu_binder_daemon_update_metadata_bridge(m_daemon,
+							     in_metadata.remoteId.c_str(),
+							     FWUPD_INPUT_STREAM(stream),
+							     FWUPD_INPUT_STREAM(stream_sig),
+							     &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	activate(const std::string &in_id) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_activate_bridge(m_daemon, in_id.c_str(), &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	quit() override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_quit_bridge(m_daemon, &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	unlock(const std::string &in_id) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_unlock_bridge(m_daemon, in_id.c_str(), &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	verify(const std::string &in_id) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_verify_bridge(m_daemon, in_id.c_str(), &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	verifyUpdate(const std::string &in_id) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_verify_update_bridge(m_daemon, in_id.c_str(), &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	modifyRemote(const std::string &in_remoteId,
+		     const std::string &in_key,
+		     const std::string &in_value) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_modify_remote_bridge(m_daemon,
+							   in_remoteId.c_str(),
+							   in_key.c_str(),
+							   in_value.c_str(),
+							   &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	cleanRemote(const std::string &in_remoteId) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_clean_remote_bridge(m_daemon, in_remoteId.c_str(), &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	modifyDevice(const std::string &in_deviceId,
+		     const std::string &in_key,
+		     const std::string &in_value) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_modify_device_bridge(m_daemon,
+							   in_deviceId.c_str(),
+							   in_key.c_str(),
+							   in_value.c_str(),
+							   &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	modifyConfig(const std::string &in_section,
+		     const std::string &in_key,
+		     const std::string &in_value) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_modify_config_bridge(m_daemon,
+							   in_section.c_str(),
+							   in_key.c_str(),
+							   in_value.c_str(),
+							   &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	resetConfig(const std::string &in_section) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_reset_config_bridge(m_daemon, in_section.c_str(), &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	clearResults(const std::string &in_deviceId) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_clear_results_bridge(m_daemon, in_deviceId.c_str(), &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getDetails(const ::ndk::ScopedFileDescriptor &in_fd,
+		   std::vector<aidl_fwupd::FwupdDevice> *_aidl_return) override
+	{
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		g_autoptr(FuEngineRequest) request = fu_binder_daemon_create_request(m_daemon);
+		g_autoptr(FwupdUnixInputStream) stream = NULL;
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GPtrArray) details = NULL;
+
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-details", &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+
+		int fd = in_fd.get();
+		if (fd < 0) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    FWUPD_ERROR_INVALID_FILE,
+			    "invalid file descriptor received");
+		}
+
+		/* the ScopedFileDescriptor owns the fd */
+		stream = fwupd_unix_input_stream_new(fd, FALSE, &error);
+		if (stream == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		details =
+		    fu_engine_get_details(engine, request, FWUPD_INPUT_STREAM(stream), &error);
+		if (details == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		for (guint i = 0; i < details->len; i++) {
+			FwupdDevice *device = FWUPD_DEVICE(g_ptr_array_index(details, i));
+			_aidl_return->push_back(fu_binder_device_to_aidl(device));
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getReportMetadata(std::vector<aidl_fwupd::FwupdKeyValue> *_aidl_return) override
+	{
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GHashTable) metadata = NULL; /* str:str */
+		GHashTableIter iter;
+		gpointer key, value;
+
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-report-metadata",
+						&error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		metadata = fu_engine_get_report_metadata(engine, &error);
+		if (metadata == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		g_hash_table_iter_init(&iter, metadata);
+		while (g_hash_table_iter_next(&iter, &key, &value)) {
+			aidl_fwupd::FwupdKeyValue kv;
+			kv.key = std::string((const gchar *)key);
+			kv.value = std::string((const gchar *)value);
+			_aidl_return->push_back(kv);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getBiosSettings(std::vector<aidl_fwupd::FwupdBiosSetting> *_aidl_return) override
+	{
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		FuContext *ctx = fu_engine_get_context(engine);
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GPtrArray) items = NULL;
+
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-bios-settings",
+						&error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		items = fu_context_get_bios_settings(ctx);
+		for (guint i = 0; i < items->len; i++) {
+			FwupdBiosSetting *setting = FWUPD_BIOS_SETTING(g_ptr_array_index(items, i));
+			_aidl_return->push_back(fu_binder_bios_setting_to_aidl(setting));
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	setBiosSettings(const std::vector<aidl_fwupd::FwupdKeyValue> &in_settings) override
+	{
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GHashTable) settings =
+		    g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+
+		for (const auto &kv : in_settings) {
+			if (!kv.key.has_value())
+				continue;
+			g_hash_table_insert(
+			    settings,
+			    g_strdup(kv.key.value().c_str()),
+			    g_strdup(kv.value.has_value() ? kv.value.value().c_str() : ""));
+		}
+		if (!fu_binder_daemon_set_bios_settings_bridge(m_daemon, settings, &error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getHostSecurityAttrs(std::vector<aidl_fwupd::FwupdSecurityAttr> *_aidl_return) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-host-security-attrs",
+						&error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		g_autoptr(FuSecurityAttrs) attrs = fu_engine_get_host_security_attrs(engine);
+		g_autoptr(GPtrArray) items = fu_security_attrs_get_all(attrs, NULL);
+
+		for (guint i = 0; i < items->len; i++) {
+			FwupdSecurityAttr *attr = FWUPD_SECURITY_ATTR(g_ptr_array_index(items, i));
+			_aidl_return->push_back(fu_binder_security_attr_to_aidl(attr));
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	getHostSecurityEvents(int32_t in_limit,
+			      std::vector<aidl_fwupd::FwupdSecurityAttr> *_aidl_return) override
+	{
+		g_autoptr(GError) error = NULL;
+		if (!fu_binder_daemon_authorize("org.freedesktop.fwupd.get-host-security-events",
+						&error)) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		FuEngine *engine = fu_daemon_get_engine(FU_DAEMON(m_daemon));
+		g_autoptr(FuSecurityAttrs) attrs = NULL;
+		g_autoptr(GPtrArray) items = NULL;
+
+		attrs = fu_engine_get_host_security_events(engine, (guint)in_limit, &error);
+		if (attrs == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		items = fu_security_attrs_get_all(attrs, NULL);
+		for (guint i = 0; i < items->len; i++) {
+			FwupdSecurityAttr *attr = FWUPD_SECURITY_ATTR(g_ptr_array_index(items, i));
+			_aidl_return->push_back(fu_binder_security_attr_to_aidl(attr));
+		}
+		return ::ndk::ScopedAStatus::ok();
+	}
+
+	::ndk::ScopedAStatus
+	selfSign(const std::string &in_data, int64_t in_flags, std::string *_aidl_return) override
+	{
+		g_autoptr(GError) error = NULL;
+		g_autofree gchar *sig = NULL;
+
+		sig = fu_binder_daemon_self_sign_bridge(m_daemon,
+							in_data.c_str(),
+							(guint64)in_flags,
+							&error);
+		if (sig == NULL) {
+			return ::ndk::ScopedAStatus::fromServiceSpecificErrorWithMessage(
+			    error->code,
+			    error->message);
+		}
+		*_aidl_return = sig;
 		return ::ndk::ScopedAStatus::ok();
 	}
 };

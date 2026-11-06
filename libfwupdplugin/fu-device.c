@@ -22,7 +22,7 @@
 #include "fu-device-poll-locker.h"
 #include "fu-device-private.h"
 #include "fu-input-stream.h"
-#include "fu-memory-input-stream.h"
+#include "fu-kernel-search-path-private.h"
 #include "fu-output-stream.h"
 #include "fu-progress-private.h"
 #include "fu-quirks.h"
@@ -845,7 +845,7 @@ fu_device_set_contents(FuDevice *self,
 
 	g_return_val_if_fail(FU_IS_DEVICE(self), FALSE);
 	g_return_val_if_fail(filename != NULL, FALSE);
-	g_return_val_if_fail(FU_IS_INPUT_STREAM(stream), FALSE);
+	g_return_val_if_fail(FWUPD_IS_INPUT_STREAM(stream), FALSE);
 	g_return_val_if_fail(FU_IS_PROGRESS(progress), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
@@ -941,7 +941,7 @@ fu_device_set_contents_bytes(FuDevice *self,
 			     FuProgress *progress,
 			     GError **error)
 {
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdMemoryInputStream) stream = NULL;
 
 	g_return_val_if_fail(FU_IS_DEVICE(self), FALSE);
 	g_return_val_if_fail(filename != NULL, FALSE);
@@ -949,8 +949,8 @@ fu_device_set_contents_bytes(FuDevice *self,
 	g_return_val_if_fail(progress == NULL || FU_IS_PROGRESS(progress), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-	stream = fu_memory_input_stream_new_from_bytes(blob);
-	return fu_device_set_contents(self, filename, stream, progress, error);
+	stream = fwupd_memory_input_stream_new_from_bytes(blob);
+	return fu_device_set_contents(self, filename, FWUPD_INPUT_STREAM(stream), progress, error);
 }
 
 /**
@@ -977,7 +977,7 @@ fu_device_get_contents_bytes(FuDevice *self,
 	FuDeviceEvent *event = NULL;
 	g_autofree gchar *event_id = NULL;
 	g_autoptr(GBytes) blob = NULL;
-	g_autoptr(FuInputStream) istr = NULL;
+	g_autoptr(FwupdFileInputStream) istr = NULL;
 
 	g_return_val_if_fail(FU_IS_DEVICE(self), NULL);
 	g_return_val_if_fail(filename != NULL, NULL);
@@ -1004,10 +1004,10 @@ fu_device_get_contents_bytes(FuDevice *self,
 		event = fu_device_save_event(FU_DEVICE(self), event_id);
 
 	/* open for reading */
-	istr = fu_input_stream_from_path(filename, error);
+	istr = fwupd_file_input_stream_new(filename, error);
 	if (istr == NULL)
 		return NULL;
-	blob = fu_input_stream_read_bytes(istr, 0, count, progress, error);
+	blob = fu_input_stream_read_bytes(FWUPD_INPUT_STREAM(istr), 0, count, progress, error);
 	if (blob == NULL)
 		return NULL;
 
@@ -1043,7 +1043,7 @@ fu_device_get_contents(FuDevice *self,
 	FuDeviceEvent *event = NULL;
 	g_autofree gchar *event_id = NULL;
 	g_autofree gchar *str = NULL;
-	g_autoptr(FuInputStream) istr = NULL;
+	g_autoptr(FwupdFileInputStream) istr = NULL;
 
 	g_return_val_if_fail(FU_IS_DEVICE(self), NULL);
 	g_return_val_if_fail(filename != NULL, NULL);
@@ -1070,10 +1070,10 @@ fu_device_get_contents(FuDevice *self,
 		event = fu_device_save_event(FU_DEVICE(self), event_id);
 
 	/* open for reading */
-	istr = fu_input_stream_from_path(filename, error);
+	istr = fwupd_file_input_stream_new(filename, error);
 	if (istr == NULL)
 		return NULL;
-	str = fu_input_stream_read_string(istr, 0, count, error);
+	str = fu_input_stream_read_string(FWUPD_INPUT_STREAM(istr), 0, count, error);
 	if (str == NULL)
 		return NULL;
 
@@ -1675,7 +1675,10 @@ fu_device_set_proxy(FuDevice *self, FuDevice *proxy)
 
 	/* copy from proxy */
 	if (proxy != NULL) {
-		fu_device_incorporate(self, proxy, FU_DEVICE_INCORPORATE_FLAG_PHYSICAL_ID);
+		fu_device_incorporate(self,
+				      proxy,
+				      FU_DEVICE_INCORPORATE_FLAG_PHYSICAL_ID |
+					  FU_DEVICE_INCORPORATE_FLAG_LOGICAL_ID);
 		priv->notify_flags_proxy_id =
 		    g_signal_connect(FWUPD_DEVICE(proxy),
 				     "notify::flags",
@@ -2420,14 +2423,36 @@ fu_device_set_quirk_kv(FuDevice *self,
 			fu_device_add_protocol(self, sections[i]);
 		return TRUE;
 	}
+	if (g_strcmp0(key, FU_QUIRKS_PROBLEM) == 0) {
+		g_auto(GStrv) sections = g_strsplit(value, ",", -1);
+		for (guint i = 0; sections[i] != NULL; i++) {
+			FwupdDeviceProblem problem = fwupd_device_problem_from_string(sections[i]);
+			if (problem == FWUPD_DEVICE_PROBLEM_UNKNOWN) {
+				g_set_error(error,
+					    FWUPD_ERROR,
+					    FWUPD_ERROR_INVALID_DATA,
+					    "unknown problem %s",
+					    sections[i]);
+				return FALSE;
+			}
+			fu_device_add_problem(self, problem);
+		}
+		return TRUE;
+	}
 	if (g_strcmp0(key, FU_QUIRKS_ISSUE) == 0) {
 		g_auto(GStrv) sections = g_strsplit(value, ",", -1);
 		for (guint i = 0; sections[i] != NULL; i++)
 			fu_device_add_issue(self, sections[i]);
 		return TRUE;
 	}
+	if (g_strcmp0(key, FU_QUIRKS_VERSION_RAW) == 0) {
+		if (!fu_strtoull(value, &tmp, 0, G_MAXUINT64, FU_INTEGER_BASE_AUTO, error))
+			return FALSE;
+		fu_device_set_version_raw(self, tmp);
+		return TRUE;
+	}
 	if (g_strcmp0(key, FU_QUIRKS_VERSION) == 0) {
-		fu_device_set_version(self, value);
+		fu_device_set_version(self, value); /* nocheck:set-version */
 		return TRUE;
 	}
 	if (g_strcmp0(key, FU_QUIRKS_VERSION_LOWEST) == 0) {
@@ -3506,7 +3531,7 @@ fu_device_set_version_format(FuDevice *self, FwupdVersionFormat fmt)
 		if (fu_device_get_version_raw(self) != 0) {
 			g_autofree gchar *version =
 			    device_class->convert_version(self, fu_device_get_version_raw(self));
-			fu_device_set_version(self, version);
+			fu_device_set_version(self, version); /* nocheck:set-version */
 		}
 		if (fu_device_get_version_lowest_raw(self) != 0) {
 			g_autofree gchar *version =
@@ -3712,7 +3737,7 @@ fu_device_set_version_raw(FuDevice *self, guint64 version_raw)
 	if (device_class->convert_version != NULL) {
 		g_autofree gchar *version = device_class->convert_version(self, version_raw);
 		if (version != NULL)
-			fu_device_set_version(self, version);
+			fu_device_set_version(self, version); /* nocheck:set-version */
 	}
 }
 
@@ -4176,10 +4201,11 @@ fu_device_set_logical_id(FuDevice *self, const gchar *logical_id)
 	/* not allowed after ->probe() and ->setup() have completed */
 	if (priv->done_setup) {
 		g_warning("cannot change %s logical ID from %s to %s as "
-			  "FuDevice->setup() has already completed",
+			  "%s->setup() has already completed",
 			  fu_device_get_id(self),
 			  priv->logical_id,
-			  logical_id);
+			  logical_id,
+			  G_OBJECT_TYPE_NAME(self));
 		return;
 	}
 
@@ -4423,7 +4449,7 @@ fu_device_get_backend_parent_with_subsystem(FuDevice *self, const gchar *subsyst
 	/* save response */
 	if (event != NULL) {
 		fu_device_event_set_str(event, "GType", G_OBJECT_TYPE_NAME(parent));
-		if (fu_device_get_id(self) != NULL)
+		if (fu_device_get_id(parent) != NULL)
 			fu_device_event_set_str(event, "DeviceId", fu_device_get_id(parent));
 		if (fu_device_get_backend_id(parent) != NULL) {
 			fu_device_event_set_str(event,
@@ -4683,10 +4709,11 @@ fu_device_set_physical_id(FuDevice *self, const gchar *physical_id)
 	/* not allowed after ->probe() and ->setup() have completed */
 	if (priv->done_setup) {
 		g_warning("cannot change %s physical ID from %s to %s as "
-			  "FuDevice->setup() has already completed",
+			  "%s->setup() has already completed",
 			  fu_device_get_id(self),
 			  priv->physical_id,
-			  physical_id);
+			  physical_id,
+			  G_OBJECT_TYPE_NAME(self));
 		return;
 	}
 
@@ -5744,7 +5771,7 @@ fu_device_prepare_firmware(FuDevice *self,
 	gsize fw_size;
 
 	g_return_val_if_fail(FU_IS_DEVICE(self), NULL);
-	g_return_val_if_fail(FU_IS_INPUT_STREAM(stream), NULL);
+	g_return_val_if_fail(FWUPD_IS_INPUT_STREAM(stream), NULL);
 	g_return_val_if_fail(FU_IS_PROGRESS(progress), NULL);
 	g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
@@ -5810,7 +5837,8 @@ fu_device_prepare_firmware(FuDevice *self,
  * serial numbers or user-configuration values and can be used to calculate the
  * device checksum.
  *
- * The return value can be converted to a blob of memory using fu_firmware_write().
+ * The return value can be converted to a blob of memory using fu_firmware_write() or
+ * fu_firmware_write_array().
  *
  * Returns: (transfer full): a #FuFirmware, or %NULL for error
  *
@@ -6098,7 +6126,10 @@ fu_device_open_internal(FuDevice *self, GError **error)
 
 	/* probe */
 	if (!fu_device_probe(self, error)) {
-		g_prefix_error_literal(error, "failed to probe: ");
+		g_autofree gchar *id_display = fu_device_get_id_display(self);
+		g_prefix_error(error,
+			       "failed to probe %s: ",
+			       id_display != NULL ? id_display : "device");
 		return FALSE;
 	}
 
@@ -6422,10 +6453,6 @@ fu_device_convert_instance_ids(FuDevice *self)
 	gboolean no_generic_guids;
 
 	g_return_if_fail(FU_IS_DEVICE(self));
-
-	/* already set */
-	if (fu_device_get_guids(self)->len > 0)
-		return;
 
 	/* convert the FuDevice IDs to FwupdDevice IDs */
 	no_generic_guids = fu_device_has_private_flag_quark(self, quarks[QUARK_NO_GENERIC_GUIDS]);
@@ -6999,6 +7026,10 @@ fu_device_incorporate(FuDevice *self, FuDevice *donor, FuDeviceIncorporateFlags 
 		if (priv->proxy_guid == NULL && priv_donor->proxy_guid != NULL)
 			fu_device_set_proxy_guid(self, priv_donor->proxy_guid);
 	}
+	if (flag & FU_DEVICE_INCORPORATE_FLAG_TARGET) {
+		if (priv->target == NULL && priv_donor->target != NULL)
+			fu_device_set_target(self, priv_donor->target);
+	}
 	if (flag & FU_DEVICE_INCORPORATE_FLAG_PRIVATE_FLAGS) {
 		if (priv_donor->private_flags != NULL) {
 			for (guint i = 0; i < priv_donor->private_flags->len; i++) {
@@ -7354,7 +7385,7 @@ fu_device_ensure_from_component_verfmt(FuDevice *self, XbNode *component)
 		if (fu_device_get_version_raw(self) != 0x0) {
 			g_autofree gchar *version = NULL;
 			version = fu_version_from_uint32(fu_device_get_version_raw(self), verfmt);
-			fu_device_set_version(self, version);
+			fu_device_set_version(self, version); /* nocheck:set-version */
 		}
 		if (fu_device_get_version_lowest_raw(self) != 0x0) {
 			g_autofree gchar *version = NULL;
@@ -7463,7 +7494,7 @@ fu_device_ensure_from_release(FuDevice *self, XbNode *rel)
 	if (fu_device_has_private_flag(self, FU_DEVICE_PRIVATE_FLAG_MD_SET_VERSION)) {
 		const gchar *version = xb_node_get_attr(rel, "version");
 		if (version != NULL) {
-			fu_device_set_version(self, version);
+			fu_device_set_version(self, version); /* nocheck:set-version */
 			fu_device_remove_private_flag(self, FU_DEVICE_PRIVATE_FLAG_MD_SET_VERSION);
 		}
 	}
@@ -8198,6 +8229,47 @@ fu_device_load_event(FuDevice *self, const gchar *id, GError **error)
 }
 
 /**
+ * fu_device_kernel_search_path_locker_new:
+ * @self: a #FuDevice
+ * @path: the new devivce path
+ * @error: (nullable): optional return location for an error
+ *
+ * Sets the kernel firmware search path. When the #FuKernelSearchPathLocker is deallocated path
+ * is restored to the previous value. The @path is also created if it does not already exist.
+ *
+ * This object is typically called using g_autoptr() but the device can also be
+ * manually closed using g_clear_object().
+ *
+ * Returns: (transfer full): a #FuKernelSearchPathLocker, or %NULL on error
+ *
+ * Since: 2.1.9
+ **/
+FuKernelSearchPathLocker *
+fu_device_kernel_search_path_locker_new(FuDevice *self, const gchar *path, GError **error)
+{
+	FuDevicePrivate *priv = GET_PRIVATE(self);
+	FuPathStore *pstore = fu_context_get_path_store(priv->ctx);
+	FuKernelSearchPathLockerFlags flags = FU_KERNEL_SEARCH_PATH_LOCKER_FLAG_NONE;
+
+	g_return_val_if_fail(FU_IS_DEVICE(self), NULL);
+	g_return_val_if_fail(path != NULL, NULL);
+	g_return_val_if_fail(error == NULL || *error == NULL, NULL);
+
+	if (g_mkdir_with_parents(path, 0700) == -1) {
+		g_set_error(error,
+			    FWUPD_ERROR,
+			    FWUPD_ERROR_INTERNAL,
+			    "failed to create %s: %s",
+			    path,
+			    fwupd_strerror(errno));
+		return NULL;
+	}
+	if (fu_device_has_flag(self, FWUPD_DEVICE_FLAG_EMULATED))
+		flags |= FU_KERNEL_SEARCH_PATH_LOCKER_FLAG_EMULATED;
+	return fu_kernel_search_path_locker_new(pstore, path, flags, error);
+}
+
+/**
  * fu_device_get_events:
  * @self: a #FuDevice
  *
@@ -8468,7 +8540,6 @@ fu_device_class_init(FuDeviceClass *klass)
 	    FU_DEVICE_PRIVATE_FLAG_INSTALL_LOOP_RESTART,
 	    FU_DEVICE_PRIVATE_FLAG_MD_SET_REQUIRED_FREE,
 	    FU_DEVICE_PRIVATE_FLAG_LAZY_VERFMT,
-	    FU_DEVICE_PRIVATE_FLAG_NO_VERSION_EXPECTED,
 	    FU_DEVICE_PRIVATE_FLAG_NO_GENERIC_VERSION,
 	    FU_DEVICE_PRIVATE_FLAG_STRICT_EMULATION_ORDER,
 	};

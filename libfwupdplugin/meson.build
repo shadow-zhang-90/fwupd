@@ -9,7 +9,6 @@ fwupdplugin_structs = [
   'fu-cfu.rs', # fuzzing
   'fu-cfu-firmware.rs', # fuzzing
   'fu-config.rs', # fuzzing
-  'fu-compressor.rs', # fuzzing
   'fu-coswid.rs', # fuzzing
   'fu-context.rs', # fuzzing
   'fu-device.rs', # fuzzing
@@ -20,6 +19,7 @@ fwupdplugin_structs = [
   'fu-efi.rs', # fuzzing
   'fu-elf.rs', # fuzzing
   'fu-fdt.rs', # fuzzing
+  'fu-fw-upload.rs', # fuzzing
   'fu-firmware.rs', # fuzzing
   'fu-fmap.rs', # fuzzing
   'fu-hid.rs', # fuzzing
@@ -80,10 +80,10 @@ fwupdplugin_src = [
   'fu-acpi-table.c', # fuzzing
   'fu-backend.c', # fuzzing
   'fu-bios-setting.c', # fuzzing
-  'fu-bios-settings.c', # fuzzing
   'fu-block-device.c',
   'fu-block-partition.c',
-  'fu-bluez-device.c',
+  'fu-bluetooth-device.c',
+  'fu-bluetooth-proxy.c',
   'fu-byte-array.c', # fuzzing
   'fu-bytes.c', # fuzzing
   'fu-cab-firmware.c', # fuzzing
@@ -104,6 +104,7 @@ fwupdplugin_src = [
   'fu-context-helper.c',
   'fu-coswid-common.c', # fuzzing
   'fu-coswid-firmware.c', # fuzzing
+  'fu-coswid-collection.c', # fuzzing
   'fu-crc.c', # fuzzing
   'fu-csv-entry.c', # fuzzing
   'fu-csv-firmware.c', # fuzzing
@@ -141,7 +142,6 @@ fwupdplugin_src = [
   'fu-elf-firmware.c', # fuzzing
   'fu-fdt-firmware.c', # fuzzing
   'fu-fdt-image.c', # fuzzing
-  'fu-file-input-stream.c', # fuzzing
   'fu-firmware.c', # fuzzing
   'fu-firmware-common.c', # fuzzing
   'fu-fit-firmware.c', # fuzzing
@@ -169,17 +169,18 @@ fwupdplugin_src = [
   'fu-ifwi-fpt-firmware.c', # fuzzing
   'fu-ihex-firmware.c', # fuzzing
   'fu-input-stream.c', # fuzzing
-  'fu-memory-input-stream.c', # fuzzing
   'fu-intel-me-device.c', # fuzzing
   'fu-intel-thunderbolt-firmware.c', # fuzzing
   'fu-intel-thunderbolt-nvm.c', # fuzzing
   'fu-io-channel.c', # fuzzing
   'fu-ioctl.c', # fuzzing
   'fu-json-firmware.c', # fuzzing
+  'fu-json-parser.c', # fuzzing
   'fu-kenv.c', # fuzzing
   'fu-kernel.c', # fuzzing
   'fu-kernel-search-path.c', # fuzzing
   'fu-linear-firmware.c', # fuzzing
+  'fu-linux-fw-upload-device.c',
   'fu-lzma-common.c', # fuzzing
   'fu-mei-device.c',
   'fu-mem.c', # fuzzing
@@ -195,7 +196,6 @@ fwupdplugin_src = [
   'fu-pkcs7.c',
   'fu-processor-device.c',
   'fu-protobuf.c', # fuzzing
-  'fu-ptr-array.c', # fuzzing
   'fu-oprom-device.c',
   'fu-output-stream.c', # fuzzing
   'fu-plugin.c',
@@ -208,7 +208,6 @@ fwupdplugin_src = [
   'fu-serio-device.c',
   'fu-smbios.c', # fuzzing
   'fu-srec-firmware.c', # fuzzing
-  'fu-stream-input-stream.c', # fuzzing
   'fu-string.c', # fuzzing
   'fu-sum.c', # fuzzing
   'fu-temporary-directory.c', # fuzzing
@@ -256,11 +255,10 @@ endif
 fwupdplugin_headers = [
   'fu-acpi-table.h',
   'fu-backend.h',
-  'fu-bios-settings.h',
-  'fu-bios-settings-private.h',
+  'fu-bios-setting.h',
   'fu-block-device.h',
   'fu-block-partition.h',
-  'fu-bluez-device.h',
+  'fu-bluetooth-device.h',
   'fu-byte-array.h',
   'fu-bytes.h',
   'fu-cab-firmware.h',
@@ -319,7 +317,6 @@ fwupdplugin_headers = [
   'fu-endian.h',
   'fu-fdt-firmware.h',
   'fu-fdt-image.h',
-  'fu-file-input-stream.h',
   'fu-firmware-common.h',
   'fu-firmware.h',
   'fu-fit-firmware.h',
@@ -339,20 +336,20 @@ fwupdplugin_headers = [
   'fu-ifwi-fpt-firmware.h',
   'fu-ihex-firmware.h',
   'fu-input-stream.h',
-  'fu-memory-input-stream.h',
   'fu-intel-me-device.h',
   'fu-intel-thunderbolt-firmware.h',
   'fu-intel-thunderbolt-nvm.h',
   'fu-io-channel.h',
   'fu-ioctl.h',
   'fu-json-firmware.h',
+  'fu-json-parser.h',
   'fu-kenv.h',
   'fu-kernel.h',
   'fu-kernel-search-path.h',
   'fu-linear-firmware.h',
+  'fu-linux-fw-upload-device.h',
   'fu-mei-device.h',
   'fu-mem.h',
-  'fu-mem-private.h',
   'fu-msgpack-item.h',
   'fu-oprom-device.h',
   'fu-oprom-firmware.h',
@@ -368,7 +365,6 @@ fwupdplugin_headers = [
   'fu-plugin-private.h',
   'fu-processor-device.h',
   'fu-progress.h',
-  'fu-ptr-array.h',
   'fu-quirks.h',
   'fu-sbatlevel-section.h',
   'fu-secure-bytes.h',
@@ -379,7 +375,6 @@ fwupdplugin_headers = [
   'fu-smbios.h',
   'fu-smbios-private.h',
   'fu-srec-firmware.h',
-  'fu-stream-input-stream.h',
   'fu-string.h',
   'fu-sum.h',
   'fu-temporary-directory.h',
@@ -443,7 +438,7 @@ fwupdplugin = library(
   sources: [fwupdplugin_src, fwupdplugin_headers],
   include_directories: [root_incdir, fwupd_incdir],
   dependencies: [library_deps],
-  link_with: [fwupd],
+  link_with: [fwupd, fwupd_ffi_lib],
   install_dir: libdir_pkg,
   install: true,
 )
@@ -508,6 +503,7 @@ if get_option('tests')
     sources: [
       'fu-test.c',
       'fu-self-test-device.c',
+      'fu-test-bluetooth-proxy.c',
     ],
     include_directories: [root_incdir, fwupd_incdir],
     dependencies: [library_deps, fwupdplugin_rs_dep],
@@ -515,8 +511,10 @@ if get_option('tests')
   )
 
   foreach test_name : [
+    'acpi-table',
     'backend',
-    'bios-settings',
+    'bios-setting',
+    'bluetooth-device',
     'byte-array',
     'bytes',
     'cab-firmware',
@@ -530,6 +528,7 @@ if get_option('tests')
     'device',
     'device-event',
     'device-locker',
+    'dump',
     'efi',
     'efivars',
     'fdt-firmware',
@@ -540,32 +539,40 @@ if get_option('tests')
     'ihex-firmware',
     'input-stream',
     'intel-me',
+    'io-channel',
     'kernel',
     'kernel-search-path',
+    'linux-fw-upload-device',
     'lzma',
+    'mei-device',
     'mem',
     'msgpack',
+    'output-stream',
     'partial-input-stream',
     'path',
     'path-store',
+    'pci-device',
+    'pkcs7',
     'plugin',
     'progress',
     'protobuf',
-    'ptr-array',
     'quirks',
     'secure-bytes',
     'security-attrs',
     'smbios',
     'srec-firmware',
-    'stream-input-stream',
     'string',
     'struct',
+    'sum',
     'temporary-directory',
     'tpm-eventlog',
     'uefi-device',
     'udev-device',
+    'usb-config-descriptor',
+    'usb-hid-descriptor',
     'version',
     'volume',
+    'x509-certificate',
     'xor',
   ]
     e = executable(

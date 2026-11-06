@@ -30,8 +30,6 @@ fu_context_set_main_context(FuContext *self, GMainContext *main_ctx) G_GNUC_NON_
 void
 fu_context_housekeeping(FuContext *self) G_GNUC_NON_NULL(1);
 gboolean
-fu_context_reload_bios_settings(FuContext *self, GError **error);
-gboolean
 fu_context_load(FuContext *self, FuProgress *progress, FuContextLoadFlags flags, GError **error)
     G_GNUC_NON_NULL(1, 2);
 GHashTable *
@@ -89,5 +87,12 @@ gpointer
 fu_context_get_data(FuContext *self, const gchar *key) G_GNUC_PURE;
 void
 fu_context_set_data(FuContext *self, const gchar *key, gpointer data);
+
+GPtrArray *
+fu_context_get_host_bkcs(FuContext *self) G_GNUC_NON_NULL(1);
+gchar *
+fu_context_get_host_bkcs_as_str(FuContext *self) G_GNUC_NON_NULL(1);
+void
+fu_context_add_host_bkc(FuContext *self, const gchar *host_bkc) G_GNUC_NON_NULL(1, 2);
 
 G_END_DECLS

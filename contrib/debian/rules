@@ -17,6 +17,9 @@ CONFARGS =
 
 ifneq ($(CI),)
 	CONFARGS += --werror -Db_coverage=true
+	# fixfilepath remaps the build path to '.' which makes gcov record
+	# relative source paths that gcovr >= 8.7 cannot resolve
+	DEB_BUILD_MAINT_OPTIONS += reproducible=-fixfilepath
 else
 	CONFARGS += -Dsupported_build=enabled
 endif
@@ -64,7 +67,7 @@ override_dh_auto_clean:
 
 override_dh_auto_configure:
 ifneq ($(DEB_BUILD_ARCH),$(DEB_HOST_ARCH))
-	printf '[binaries]\nrust = ['\''rustc'\'', '\''--target'\'', '\''$(RUST_TARGET)'\'']\n' \
+	printf '[binaries]\nrust = ['\''rustc'\'', '\''--target'\'', '\''$(RUST_TARGET)'\'']\n[properties]\nrust_target = '\''$(RUST_TARGET)'\''\n' \
 		>$(CURDIR)/debian/rust-cross.ini
 endif
 	dh_auto_configure -- $(CONFARGS)

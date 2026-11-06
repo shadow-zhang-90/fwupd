@@ -49,6 +49,7 @@ fu_fdt_image_guess_format_from_key(const gchar *key)
 			      {"compression", FU_FDT_IMAGE_FORMAT_STR},
 			      {"creator", FU_FDT_IMAGE_FORMAT_STR},
 			      {"data-offset", FU_FDT_IMAGE_FORMAT_UINT32},
+			      {"data-position", FU_FDT_IMAGE_FORMAT_UINT32},
 			      {"data-size", FU_FDT_IMAGE_FORMAT_UINT32},
 			      {"default", FU_FDT_IMAGE_FORMAT_STR},
 			      {"description", FU_FDT_IMAGE_FORMAT_STR},
@@ -116,7 +117,7 @@ fu_fdt_image_export(FuFirmware *firmware, FuFirmwareExportFlags flags, XbBuilder
 			str = g_strdup_printf("0x%x", (guint)tmp);
 		} else if (g_strcmp0(format, FU_FDT_IMAGE_FORMAT_UINT64) == 0 && bufsz == 8) {
 			guint64 tmp = fu_memread_uint64(buf, G_BIG_ENDIAN);
-			str = g_strdup_printf("0x%x", (guint)tmp);
+			str = g_strdup_printf("0x%" G_GINT64_MODIFIER "x", tmp);
 		} else if (g_strcmp0(format, FU_FDT_IMAGE_FORMAT_STR) == 0 && bufsz > 0) {
 			str = g_strndup((const gchar *)buf, bufsz);
 		} else if (g_strcmp0(format, FU_FDT_IMAGE_FORMAT_STRLIST) == 0 && bufsz > 0) {

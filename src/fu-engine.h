@@ -102,15 +102,9 @@ fu_engine_clear_results(FuEngine *self, const gchar *device_id, GError **error)
 gboolean
 fu_engine_update_metadata(FuEngine *self,
 			  const gchar *remote_id,
-			  gint fd,
-			  gint fd_sig,
-			  GError **error) G_GNUC_NON_NULL(1, 2);
-gboolean
-fu_engine_update_metadata_bytes(FuEngine *self,
-				const gchar *remote_id,
-				GBytes *bytes_raw,
-				GBytes *bytes_sig,
-				GError **error) G_GNUC_NON_NULL(1, 2, 3);
+			  FuInputStream *stream,
+			  FuInputStream *stream_sig,
+			  GError **error) G_GNUC_NON_NULL(1, 2, 3);
 gboolean
 fu_engine_unlock(FuEngine *self, const gchar *device_id, GError **error) G_GNUC_NON_NULL(1, 2);
 gboolean
@@ -161,13 +155,23 @@ fu_engine_install_release(FuEngine *self,
 			  FwupdInstallFlags flags,
 			  GError **error) G_GNUC_NON_NULL(1, 2, 3);
 gboolean
-fu_engine_install_blob(FuEngine *self,
-		       FuDevice *device,
-		       FuRelease *release,
-		       FuProgress *progress,
-		       FwupdInstallFlags flags,
-		       FwupdFeatureFlags feature_flags,
-		       GError **error) G_GNUC_NON_NULL(1, 2, 3, 4);
+fu_engine_write_blob(FuEngine *self,
+		     FuDevice *device,
+		     FuRelease *release,
+		     FuProgress *progress,
+		     FwupdInstallFlags flags,
+		     FwupdFeatureFlags feature_flags,
+		     GError **error) G_GNUC_NON_NULL(1, 2, 3, 4);
+gboolean
+fu_engine_write_blob_for_device_id(FuEngine *self,
+				   const gchar *device_id,
+				   FuInputStream *stream,
+				   const gchar *filename_hint,
+				   const gchar *version,
+				   FuProgress *progress,
+				   FwupdInstallFlags flags,
+				   FwupdFeatureFlags feature_flags,
+				   GError **error) G_GNUC_NON_NULL(1, 2, 3);
 gboolean
 fu_engine_install_releases(FuEngine *self,
 			   FuEngineRequest *request,

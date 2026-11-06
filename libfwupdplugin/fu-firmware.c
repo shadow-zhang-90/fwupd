@@ -12,14 +12,11 @@
 #include "fu-bytes.h"
 #include "fu-chunk-private.h"
 #include "fu-common.h"
-#include "fu-file-input-stream.h"
 #include "fu-firmware-private.h"
 #include "fu-fuzzer.h"
 #include "fu-input-stream.h"
 #include "fu-mem.h"
-#include "fu-memory-input-stream.h"
 #include "fu-partial-input-stream.h"
-#include "fu-ptr-array.h"
 #include "fu-string.h"
 
 /**
@@ -707,7 +704,7 @@ fu_firmware_get_stream(FuFirmware *self, GError **error)
 	if (priv->stream != NULL)
 		return g_object_ref(priv->stream);
 	if (priv->bytes != NULL)
-		return fu_memory_input_stream_new_from_bytes(priv->bytes);
+		return FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(priv->bytes));
 	g_set_error_literal(error, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND, "no stream or bytes set");
 	return NULL;
 }
@@ -729,7 +726,7 @@ fu_firmware_set_stream(FuFirmware *self, FuInputStream *stream, GError **error)
 {
 	FuFirmwarePrivate *priv = GET_PRIVATE(self);
 	g_return_val_if_fail(FU_IS_FIRMWARE(self), FALSE);
-	g_return_val_if_fail(stream == NULL || FU_IS_INPUT_STREAM(stream), FALSE);
+	g_return_val_if_fail(stream == NULL || FWUPD_IS_INPUT_STREAM(stream), FALSE);
 	if (stream != NULL) {
 		if (!fu_input_stream_size(stream, &priv->streamsz, error))
 			return FALSE;
@@ -934,7 +931,7 @@ fu_firmware_tokenize(FuFirmware *self,
 	FuFirmwareClass *klass = FU_FIRMWARE_GET_CLASS(self);
 
 	g_return_val_if_fail(FU_IS_FIRMWARE(self), FALSE);
-	g_return_val_if_fail(FU_IS_INPUT_STREAM(stream), FALSE);
+	g_return_val_if_fail(FWUPD_IS_INPUT_STREAM(stream), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
 	/* optionally subclassed */
@@ -1102,7 +1099,7 @@ fu_firmware_parse_stream(FuFirmware *self,
 	g_autoptr(GBytes) blob = NULL;
 
 	g_return_val_if_fail(FU_IS_FIRMWARE(self), FALSE);
-	g_return_val_if_fail(FU_IS_INPUT_STREAM(stream), FALSE);
+	g_return_val_if_fail(FWUPD_IS_INPUT_STREAM(stream), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
 	/* sanity check */
@@ -1123,7 +1120,8 @@ fu_firmware_parse_stream(FuFirmware *self,
 						  error);
 		if (blob == NULL)
 			return FALSE;
-		seekable_stream = fu_memory_input_stream_new_from_bytes(blob);
+		seekable_stream =
+		    FWUPD_INPUT_STREAM(fwupd_memory_input_stream_new_from_bytes(blob));
 	} else {
 		seekable_stream = g_object_ref(stream);
 	}
@@ -1186,9 +1184,11 @@ fu_firmware_parse_stream(FuFirmware *self,
 		/* we want all firmware subclasses to set this now */
 		if (G_OBJECT_TYPE(self) != FU_TYPE_FIRMWARE &&
 		    cpriv->size_max == FU_FIRMWARE_SIZE_MAX_DEFAULT) {
-			g_critical(
-			    "%s did not set firmware max size with fu_firmware_set_size_max()",
-			    G_OBJECT_TYPE_NAME(self));
+			g_autofree gchar *sz = g_format_size(priv->streamsz);
+			g_critical("%s did not set firmware max size with "
+				   "fu_firmware_set_size_max(); stream was %s",
+				   G_OBJECT_TYPE_NAME(self),
+				   sz);
 		}
 #endif
 	}
@@ -1279,14 +1279,14 @@ fu_firmware_parse_bytes(FuFirmware *self,
 			FuFirmwareParseFlags flags,
 			GError **error)
 {
-	g_autoptr(FuInputStream) stream = NULL;
+	g_autoptr(FwupdMemoryInputStream) stream = NULL;
 
 	g_return_val_if_fail(FU_IS_FIRMWARE(self), FALSE);
 	g_return_val_if_fail(fw != NULL, FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-	stream = fu_memory_input_stream_new_from_bytes(fw);
-	return fu_firmware_parse_stream(self, stream, offset, flags, error);
+	stream = fwupd_memory_input_stream_new_from_bytes(fw);
+	return fu_firmware_parse_stream(self, FWUPD_INPUT_STREAM(stream), offset, flags, error);
 }
 
 /**
@@ -1635,18 +1635,49 @@ fu_firmware_new_from_filename(const gchar *filename, GError **error)
 gboolean
 fu_firmware_parse_file(FuFirmware *self, GFile *file, FuFirmwareParseFlags flags, GError **error)
 {
-	g_autoptr(FuFileInputStream) stream = NULL;
+	g_autoptr(FwupdFileInputStream) stream = NULL;
 
 	g_return_val_if_fail(FU_IS_FIRMWARE(self), FALSE);
 	g_return_val_if_fail(G_IS_FILE(file), FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-	stream = fu_file_input_stream_from_file(file, error);
+	stream = fwupd_file_input_stream_new_from_file(file, error);
 	if (stream == NULL) {
 		fwupd_error_convert(error);
 		return FALSE;
 	}
-	return fu_firmware_parse_stream(self, FU_INPUT_STREAM(stream), 0, flags, error);
+	return fu_firmware_parse_stream(self, FWUPD_INPUT_STREAM(stream), 0, flags, error);
+}
+
+/**
+ * fu_firmware_write_array:
+ * @self: a #FuFirmware
+ * @error: (nullable): optional return location for an error
+ *
+ * Writes a firmware, typically packing the images into a binary blob.
+ *
+ * Returns: (transfer full): a data blob
+ *
+ * Since: 2.1.8
+ **/
+GByteArray *
+fu_firmware_write_array(FuFirmware *self, GError **error)
+{
+	FuFirmwareClass *klass = FU_FIRMWARE_GET_CLASS(self);
+	g_autoptr(GBytes) blob = NULL;
+
+	g_return_val_if_fail(FU_IS_FIRMWARE(self), NULL);
+	g_return_val_if_fail(error == NULL || *error == NULL, NULL);
+
+	/* subclassed */
+	if (klass->write != NULL)
+		return klass->write(self, error);
+
+	/* just add default blob */
+	blob = fu_firmware_get_bytes_with_patches(self, error);
+	if (blob == NULL)
+		return NULL;
+	return g_bytes_unref_to_array(g_steal_pointer(&blob));
 }
 
 /**
@@ -2475,8 +2506,7 @@ static GPtrArray *
 fu_firmware_get_images_sorted(FuFirmware *self)
 {
 	FuFirmwarePrivate *priv = GET_PRIVATE(self);
-	g_autoptr(GPtrArray) images =
-	    fu_ptr_array_copy(priv->images, (GCopyFunc)g_object_ref, g_object_unref);
+	g_autoptr(GPtrArray) images = g_ptr_array_copy(priv->images, (GCopyFunc)g_object_ref, NULL);
 	if (priv->flags & FU_FIRMWARE_FLAG_DEDUPE_IDX)
 		g_ptr_array_sort(images, fu_firmware_sort_by_idx_cb);
 	if (priv->flags & FU_FIRMWARE_FLAG_DEDUPE_ID)
@@ -2851,7 +2881,7 @@ fu_firmware_new_from_gtypes(FuInputStream *stream,
 	g_autoptr(GArray) gtypes = g_array_new(FALSE, FALSE, sizeof(GType));
 	g_autoptr(GError) error_all = NULL;
 
-	g_return_val_if_fail(FU_IS_INPUT_STREAM(stream), NULL);
+	g_return_val_if_fail(FWUPD_IS_INPUT_STREAM(stream), NULL);
 	g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
 	/* create array of GTypes */
@@ -3035,28 +3065,30 @@ fu_firmware_roundtrip_from_filename(const gchar *builder_fn,
 }
 
 static gboolean
-fu_firmware_fuzzer_test_input(FuFuzzer *fuzzer, GBytes *blob, GError **error)
+fu_firmware_fuzzer_test_input(FuFuzzer *fuzzer, GByteArray *buf, GError **error)
 {
 	FuFirmware *self = FU_FIRMWARE(fuzzer);
-	g_autoptr(GBytes) fw = NULL;
+	g_autoptr(GByteArray) buf_out = NULL;
+	g_autoptr(FwupdMemoryInputStream) stream = NULL;
 
-	if (!fu_firmware_parse_bytes(self,
-				     blob,
-				     0x0,
-				     FU_FIRMWARE_PARSE_FLAG_NO_SEARCH |
-					 FU_FIRMWARE_PARSE_FLAG_IGNORE_VID_PID |
-					 FU_FIRMWARE_PARSE_FLAG_IGNORE_CHECKSUM,
-				     error))
+	stream = fwupd_memory_input_stream_new_from_data(buf->data, buf->len, NULL);
+	if (!fu_firmware_parse_stream(
+		self,
+		FWUPD_INPUT_STREAM(stream),
+		0x0,
+		FU_FIRMWARE_PARSE_FLAG_NO_SEARCH | FU_FIRMWARE_PARSE_FLAG_CACHE_BLOB |
+		    FU_FIRMWARE_PARSE_FLAG_IGNORE_VID_PID | FU_FIRMWARE_PARSE_FLAG_IGNORE_CHECKSUM,
+		error))
 		return FALSE;
-	fw = fu_firmware_write(self, error);
-	if (fw == NULL)
+	buf_out = fu_firmware_write_array(self, error);
+	if (buf_out == NULL)
 		return FALSE;
 
 	/* success */
 	return TRUE;
 }
 
-static GBytes *
+static GByteArray *
 fu_firmware_fuzzer_build_example(FuFuzzer *fuzzer, GBytes *blob, GError **error)
 {
 	FuFirmware *self = FU_FIRMWARE(fuzzer);
@@ -3093,7 +3125,7 @@ fu_firmware_fuzzer_build_example(FuFuzzer *fuzzer, GBytes *blob, GError **error)
 	}
 	if (!fu_firmware_build(self, n, error))
 		return NULL;
-	return fu_firmware_write(self, error);
+	return fu_firmware_write_array(self, error);
 }
 
 static void
